@@ -115,6 +115,7 @@ pub mod hil;
 pub mod introspection;
 pub mod ipc;
 pub mod platform;
+pub mod power_manager;
 pub mod process;
 pub mod process_checker;
 pub mod processbuffer;
