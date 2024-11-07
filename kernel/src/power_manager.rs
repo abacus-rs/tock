@@ -1,6 +1,6 @@
 use crate::ErrorCode;
 
-pub struct PowerError<T>(pub T, ErrorCode);
+pub struct PowerError<T>(pub T, pub ErrorCode);
 
 // Question / TODO: I think the logic for use power will always be the same
 // and should not be implemented in the chip specific power manager. We
