@@ -86,6 +86,7 @@ use kernel::scheduler::round_robin::RoundRobinSched;
 use kernel::{capabilities, create_capability, debug, debug_gpio, debug_verbose, static_init};
 use nrf52840::gpio::Pin;
 use nrf52840::interrupt_service::Nrf52840DefaultPeripherals;
+use nrf52840::power_manager::Nrf52840PowerManager;
 use nrf52_components::{UartChannel, UartPins};
 
 // The nRF52840DK LEDs (see back of board)
@@ -135,7 +136,8 @@ pub mod io;
 const USB_DEBUGGING: bool = false;
 
 /// This platform's chip type:
-pub type Chip = nrf52840::chip::NRF52<'static, Nrf52840DefaultPeripherals<'static>>;
+pub type Chip =
+    nrf52840::chip::NRF52<'static, Nrf52840DefaultPeripherals<'static, Nrf52840PowerManager>>;
 
 /// Number of concurrent processes this platform supports.
 pub const NUM_PROCS: usize = 8;
@@ -144,7 +146,9 @@ pub const NUM_PROCS: usize = 8;
 pub static mut PROCESSES: [Option<&'static dyn kernel::process::Process>; NUM_PROCS] =
     [None; NUM_PROCS];
 
-static mut CHIP: Option<&'static nrf52840::chip::NRF52<Nrf52840DefaultPeripherals>> = None;
+static mut CHIP: Option<
+    &'static nrf52840::chip::NRF52<Nrf52840DefaultPeripherals<Nrf52840PowerManager>>,
+> = None;
 static mut PROCESS_PRINTER: Option<&'static capsules_system::process_printer::ProcessPrinterText> =
     None;
 
@@ -180,8 +184,9 @@ type VirtualKVPermissions = components::kv::VirtualKVPermissionsComponentType<KV
 type KVDriver = components::kv::KVDriverComponentType<VirtualKVPermissions>;
 
 // Temperature
-type TemperatureDriver =
-    components::temperature::TemperatureComponentType<nrf52840::temperature::Temp<'static>>;
+type TemperatureDriver = components::temperature::TemperatureComponentType<
+    nrf52840::temperature::Temp<'static, Nrf52840PowerManager>,
+>;
 
 // IEEE 802.15.4
 type Ieee802154MacDevice = components::ieee802154::Ieee802154ComponentMacDeviceType<
@@ -305,7 +310,7 @@ impl KernelResources<Chip> for Platform {
 /// Create the capsules needed for the in-kernel UDP and 15.4 stack.
 pub unsafe fn ieee802154_udp(
     board_kernel: &'static kernel::Kernel,
-    nrf52840_peripherals: &'static Nrf52840DefaultPeripherals<'static>,
+    nrf52840_peripherals: &'static Nrf52840DefaultPeripherals<'static, Nrf52840PowerManager>,
     mux_alarm: &'static MuxAlarm<nrf52840::rtc::Rtc>,
 ) -> (
     &'static Eui64Driver,
@@ -400,7 +405,7 @@ pub unsafe fn start() -> (
     &'static kernel::Kernel,
     Platform,
     &'static Chip,
-    &'static Nrf52840DefaultPeripherals<'static>,
+    &'static Nrf52840DefaultPeripherals<'static, Nrf52840PowerManager>,
     &'static MuxAlarm<'static, nrf52840::rtc::Rtc<'static>>,
 ) {
     //--------------------------------------------------------------------------
@@ -416,10 +421,14 @@ pub unsafe fn start() -> (
         [u8; nrf52840::ieee802154_radio::ACK_BUF_SIZE],
         [0; nrf52840::ieee802154_radio::ACK_BUF_SIZE]
     );
+
+    // Initialize Power Manager.
+    let power_manager = static_init!(Nrf52840PowerManager, Nrf52840PowerManager::new());
+
     // Initialize chip peripheral drivers
     let nrf52840_peripherals = static_init!(
-        Nrf52840DefaultPeripherals,
-        Nrf52840DefaultPeripherals::new(ieee802154_ack_buf)
+        Nrf52840DefaultPeripherals<Nrf52840PowerManager>,
+        Nrf52840DefaultPeripherals::new(ieee802154_ack_buf, power_manager)
     );
 
     // Set up circular peripheral dependencies.
@@ -647,7 +656,7 @@ pub unsafe fn start() -> (
         &base_peripherals.temp,
     )
     .finalize(components::temperature_component_static!(
-        nrf52840::temperature::Temp
+        nrf52840::temperature::Temp<Nrf52840PowerManager>
     ));
 
     //--------------------------------------------------------------------------

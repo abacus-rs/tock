@@ -17,3 +17,5 @@ pub mod interrupt_service;
 pub mod ieee802154_radio;
 
 pub mod peripheral_interrupts;
+
+pub mod power_manager;

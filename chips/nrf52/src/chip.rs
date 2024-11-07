@@ -4,7 +4,8 @@
 
 use core::fmt::Write;
 use cortexm4::{nvic, CortexM4, CortexMVariant};
-use kernel::platform::chip::InterruptService;
+use kernel::{platform::chip::InterruptService, power_manager::PowerManager};
+use nrf5x::temperature::Nrf5xTemperaturePeripheral;
 
 pub struct NRF52<'a, I: InterruptService + 'a> {
     mpu: cortexm4::mpu::MPU,
@@ -27,14 +28,17 @@ impl<'a, I: InterruptService + 'a> NRF52<'a, I> {
 /// If a board wishes to use only a subset of these peripherals, this
 /// should not be used or imported, and a modified version should be
 /// constructed manually in main.rs.
-pub struct Nrf52DefaultPeripherals<'a> {
+pub struct Nrf52DefaultPeripherals<'a, PM>
+where
+    PM: PowerManager<Nrf5xTemperaturePeripheral>,
+{
     pub acomp: crate::acomp::Comparator<'a>,
     pub ecb: crate::aes::AesECB<'a>,
     pub pwr_clk: crate::power::Power<'a>,
     pub ble_radio: crate::ble_radio::Radio<'a>,
     pub trng: crate::trng::Trng<'a>,
     pub rtc: crate::rtc::Rtc<'a>,
-    pub temp: crate::temperature::Temp<'a>,
+    pub temp: crate::temperature::Temp<'a, PM>,
     pub timer0: crate::timer::TimerAlarm<'a>,
     pub timer1: crate::timer::TimerAlarm<'a>,
     pub timer2: crate::timer::Timer,
@@ -48,8 +52,11 @@ pub struct Nrf52DefaultPeripherals<'a> {
     pub pwm0: crate::pwm::Pwm,
 }
 
-impl<'a> Nrf52DefaultPeripherals<'a> {
-    pub fn new() -> Self {
+impl<'a, PM> Nrf52DefaultPeripherals<'a, PM>
+where
+    PM: PowerManager<Nrf5xTemperaturePeripheral>,
+{
+    pub fn new(pm: &'a PM) -> Self {
         Self {
             acomp: crate::acomp::Comparator::new(),
             ecb: crate::aes::AesECB::new(),
@@ -57,7 +64,7 @@ impl<'a> Nrf52DefaultPeripherals<'a> {
             ble_radio: crate::ble_radio::Radio::new(),
             trng: crate::trng::Trng::new(),
             rtc: crate::rtc::Rtc::new(),
-            temp: crate::temperature::Temp::new(),
+            temp: crate::temperature::Temp::new(pm),
             timer0: crate::timer::TimerAlarm::new(0),
             timer1: crate::timer::TimerAlarm::new(1),
             timer2: crate::timer::Timer::new(2),
@@ -77,7 +84,10 @@ impl<'a> Nrf52DefaultPeripherals<'a> {
         kernel::deferred_call::DeferredCallClient::register(&self.nvmc);
     }
 }
-impl<'a> kernel::platform::chip::InterruptService for Nrf52DefaultPeripherals<'a> {
+impl<'a, PM> kernel::platform::chip::InterruptService for Nrf52DefaultPeripherals<'a, PM>
+where
+    PM: PowerManager<Nrf5xTemperaturePeripheral>,
+{
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
         match interrupt {
             crate::peripheral_interrupts::COMP => self.acomp.handle_interrupt(),
