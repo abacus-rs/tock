@@ -12,7 +12,8 @@ pub trait PowerManager<P: Peripheral> {
     fn use_power_expecting<F, S>(&self, operation: F) -> Result<(), ErrorCode>
     where
         F: FnOnce(S::Reg) -> Result<P::Store, PowerError<P::Store>>,
-        S: State<Store = P::Store>,
+        S: State<StateEnum = P::StateEnum>,
+        <P as Peripheral>::StateEnum: From<<P as Peripheral>::Store>,
     {
         // Obtain the stored state, if there is not a value here, we are within another
         // closure and should return an error.
@@ -32,12 +33,12 @@ pub trait PowerManager<P: Peripheral> {
                 // some method handling this here so this can be a one liner.
                 match operation_res {
                     Ok(new_power) => {
-                        self.store_power(new_power);
+                        self.store_power(new_power.into());
                         Ok(())
                     }
 
                     Err(PowerError(new_power, e)) => {
-                        self.store_power(new_power);
+                        self.store_power(new_power.into());
                         return Err(e);
                     }
                 }
@@ -50,24 +51,27 @@ pub trait PowerManager<P: Peripheral> {
         }
     }
 
-    fn store_power(&self, val: P::Store);
-    fn retrieve_power(&self) -> Result<P::Store, ErrorCode>;
+    fn store_power(&self, val: P::StateEnum);
+    fn retrieve_power(&self) -> Result<P::StateEnum, ErrorCode>;
 }
 
 pub trait Peripheral {
+    type StateEnum: StateEnum;
     type Store: Store;
 }
 
 pub trait Reg
 where
-    Self: TryFrom<Self::Store, Error = (ErrorCode, Self::Store)>,
+    Self: TryFrom<Self::StateEnum, Error = (ErrorCode, Self::StateEnum)>,
 {
-    type Store: Store;
+    type StateEnum: StateEnum;
 }
 
 pub trait Store {}
 
+pub trait StateEnum {}
+
 pub trait State {
-    type Reg: Reg<Store = Self::Store>;
-    type Store: Store;
+    type Reg: Reg<StateEnum = Self::StateEnum>;
+    type StateEnum: StateEnum;
 }

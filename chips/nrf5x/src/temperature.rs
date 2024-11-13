@@ -16,7 +16,7 @@ use core::marker::PhantomData;
 use core::mem::transmute;
 use core::ops::Deref;
 
-use kernel::power_manager::{Peripheral, PowerError, PowerManager, Reg, State, Store};
+use kernel::power_manager::{Peripheral, PowerError, PowerManager, Reg, State, StateEnum, Store};
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
 use kernel::utilities::registers::{
@@ -33,20 +33,20 @@ pub struct Off {}
 
 impl State for Reading {
     type Reg = Nrf5xTempRegister<Reading>;
-    type Store = Nrf5xTemperatureStore;
+    type StateEnum = Nrf5xTemperatureStore;
 }
 
 impl State for Off {
     type Reg = Nrf5xTempRegister<Off>;
-    type Store = Nrf5xTemperatureStore;
+    type StateEnum = Nrf5xTemperatureStore;
 }
 
 impl Reg for Nrf5xTempRegister<Off> {
-    type Store = Nrf5xTemperatureStore;
+    type StateEnum = Nrf5xTemperatureStore;
 }
 
 impl Reg for Nrf5xTempRegister<Reading> {
-    type Store = Nrf5xTemperatureStore;
+    type StateEnum = Nrf5xTemperatureStore;
 }
 
 impl TryFrom<Nrf5xTemperatureStore> for Nrf5xTempRegister<Reading> {
@@ -132,10 +132,12 @@ impl StepOff for Nrf5xTempRegister<Reading> {
 pub struct Nrf5xTemperaturePeripheral {}
 
 impl Peripheral for Nrf5xTemperaturePeripheral {
+    type StateEnum = Nrf5xTemperatureStore;
     type Store = Nrf5xTemperatureStore;
 }
 
 impl Store for Nrf5xTemperatureStore {}
+impl StateEnum for Nrf5xTemperatureStore {}
 
 pub enum Nrf5xTemperatureStore {
     Reading(Nrf5xTempRegister<Reading>),
