@@ -13,6 +13,7 @@
 use core::cell::Cell;
 use core::cmp::min;
 use kernel::hil::uart;
+use kernel::power_manager::{Reg, State, StateEnum};
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
 use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
