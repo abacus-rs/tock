@@ -3,7 +3,7 @@
 // Copyright Tock Contributors 2022.
 
 use kernel::{hil::time::Alarm, power_manager::PowerManager};
-use nrf52::{chip::Nrf52DefaultPeripherals, temperature::Nrf5xTemperaturePeripheral};
+use nrf52::{chip::Nrf52DefaultPeripherals, temperature::Nrf5xTempPeripheral};
 
 /// This struct, when initialized, instantiates all peripheral drivers for the nrf52840.
 /// If a board wishes to use only a subset of these peripherals, this
@@ -12,7 +12,7 @@ use nrf52::{chip::Nrf52DefaultPeripherals, temperature::Nrf5xTemperaturePeripher
 //create all base nrf52 peripherals
 pub struct Nrf52840DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTemperaturePeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral>,
 {
     pub nrf52: Nrf52DefaultPeripherals<'a, PM>,
     pub ieee802154_radio: crate::ieee802154_radio::Radio<'a>,
@@ -22,7 +22,7 @@ where
 
 impl<'a, PM> Nrf52840DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTemperaturePeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral>,
 {
     pub unsafe fn new(
         ieee802154_radio_ack_buf: &'static mut [u8; crate::ieee802154_radio::ACK_BUF_SIZE],
@@ -47,7 +47,7 @@ where
 }
 impl<'a, PM> kernel::platform::chip::InterruptService for Nrf52840DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTemperaturePeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral>,
 {
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
         match interrupt {

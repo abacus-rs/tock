@@ -5,7 +5,7 @@
 use core::fmt::Write;
 use cortexm4::{nvic, CortexM4, CortexMVariant};
 use kernel::{platform::chip::InterruptService, power_manager::PowerManager};
-use nrf5x::temperature::Nrf5xTemperaturePeripheral;
+use nrf5x::temperature::Nrf5xTempPeripheral;
 
 pub struct NRF52<'a, I: InterruptService + 'a> {
     mpu: cortexm4::mpu::MPU,
@@ -30,7 +30,7 @@ impl<'a, I: InterruptService + 'a> NRF52<'a, I> {
 /// constructed manually in main.rs.
 pub struct Nrf52DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTemperaturePeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral>,
 {
     pub acomp: crate::acomp::Comparator<'a>,
     pub ecb: crate::aes::AesECB<'a>,
@@ -54,7 +54,7 @@ where
 
 impl<'a, PM> Nrf52DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTemperaturePeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral>,
 {
     pub fn new(pm: &'a PM) -> Self {
         Self {
@@ -86,7 +86,7 @@ where
 }
 impl<'a, PM> kernel::platform::chip::InterruptService for Nrf52DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTemperaturePeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral>,
 {
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
         match interrupt {
