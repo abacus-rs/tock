@@ -20,6 +20,7 @@ use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, Writ
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 use nrf5x::pinmux;
+use power_states::states;
 
 const UARTE_MAX_BUFFER_SIZE: u32 = 0xff;
 
@@ -27,6 +28,18 @@ static mut BYTE: u8 = 0;
 
 pub const UARTE0_BASE: StaticRef<UarteRegisters> =
     unsafe { StaticRef::new(0x40002000 as *const UarteRegisters) };
+
+states!(
+    peripheral_name = "Nrf52Uarte",
+    registers = UarteRegisterBlock,
+    states = [
+        Off => [Active(RxIdle, TxIdle)],
+        Active(RxIdle, TxIdle) => [Active(RxIdle, Tx), Active(Rx, TxIdle), Off],
+        Active(Rx, TxIdle) => [Active(RxIdle, TxIdle), Active(Rx, Tx)],
+        Active(RxIdle, Tx) => [Active(RxIdle, TxIdle), Active(Rx, Tx)],
+        Active(Rx, Tx) => [Active(Rx, TxIdle), Active(RxIdle, Tx)],
+    ]
+);
 
 #[repr(C)]
 pub struct UarteRegisters {

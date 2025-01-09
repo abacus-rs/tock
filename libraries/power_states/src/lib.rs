@@ -2,29 +2,58 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::{
-    bracketed, parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated, Field, FieldMutability, Fields, FieldsUnnamed, Ident, Type, Variant, Visibility
+    bracketed,
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    punctuated::Punctuated,
+    token::Lt,
+    Field, FieldMutability, Fields, FieldsUnnamed, Ident, Type, Variant, Visibility,
 };
 
+use std::collections::hash_set::HashSet;
 
 struct State {
     ident: syn::Ident,
-    transitions: Punctuated<Ident, syn::Token![,]>
+    substates: Punctuated<syn::Ident, syn::Token![,]>,
+    transitions: Punctuated<State, syn::Token![,]>,
+}
+
+struct SubStates {
+    ident: syn::Ident,
 }
 
 impl Parse for State {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let content;
-        let ident = input.parse()?;
-        let _ : syn::Token![=>] = input.parse()?;
-        let _ : syn::token::Bracket = bracketed!(content in input);
-        let transitions_to: Punctuated<Ident, syn::Token![,]> = content.parse_terminated(syn::Ident::parse, syn::Token![,])?;
-        Ok(State{
-            ident,
-            transitions: transitions_to
+        let state = input.parse()?;
+        let substates: Punctuated<Ident, syn::token::Comma> = if input.peek(syn::token::Paren) {
+            let content;
+            let _: syn::token::Paren = syn::parenthesized!(content in input);
+            let substates: Punctuated<Ident, syn::Token![,]> =
+                content.parse_terminated(syn::Ident::parse, syn::Token![,])?;
+            Some(substates)
+        } else {
+            None
+        }
+        .unwrap_or_else(|| Punctuated::new());
+
+        let transitions = if input.peek(syn::Token![=>]) {
+            input.parse::<syn::Token![=>]>()?;
+            let content;
+            let _: syn::token::Bracket = bracketed!(content in input);
+            let transitions: Punctuated<State, syn::Token![,]> =
+                content.parse_terminated(State::parse, syn::Token![,])?;
+            transitions
+        } else {
+            Punctuated::new()
+        };
+
+        Ok(State {
+            ident: state,
+            substates: substates,
+            transitions,
         })
     }
 }
-
 
 mod custom_keywords {
     syn::custom_keyword!(peripheral_name);
@@ -35,29 +64,29 @@ mod custom_keywords {
 struct MacroInput {
     peripheral_name: String,
     registers: syn::Ident,
-    states: Punctuated<State, syn::Token![,]>
+    states: Punctuated<State, syn::Token![,]>,
 }
-
 
 impl Parse for MacroInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let _ : custom_keywords::peripheral_name = input.parse()?;
-        let _ : syn::Token![=] = input.parse()?;
+        let _: custom_keywords::peripheral_name = input.parse()?;
+        let _: syn::Token![=] = input.parse()?;
         let peripheral_name: syn::LitStr = input.parse()?;
-        let _ : syn::Token![,] = input.parse()?;
+        let _: syn::Token![,] = input.parse()?;
 
-        let _ : custom_keywords::registers = input.parse()?;
-        let _ : syn::Token![=] = input.parse()?;
+        let _: custom_keywords::registers = input.parse()?;
+        let _: syn::Token![=] = input.parse()?;
         let registers_ident: syn::Ident = input.parse()?;
-        let _ : syn::Token![,] = input.parse()?;
+        let _: syn::Token![,] = input.parse()?;
 
-        let _ : custom_keywords::states = input.parse()?;
-        let _ : syn::Token![=] = input.parse()?;
+        let _: custom_keywords::states = input.parse()?;
+        let _: syn::Token![=] = input.parse()?;
         let states_content;
-        let _ : syn::token::Bracket = bracketed!(states_content in input);
-        let states: Punctuated<State, syn::Token![,]> = states_content.parse_terminated(State::parse, syn::Token![,])?;
+        let _: syn::token::Bracket = bracketed!(states_content in input);
+        let states: Punctuated<State, syn::Token![,]> =
+            states_content.parse_terminated(State::parse, syn::Token![,])?;
 
-        Ok(MacroInput{
+        Ok(MacroInput {
             peripheral_name: peripheral_name.value(),
             registers: registers_ident,
             states,
@@ -68,7 +97,6 @@ impl Parse for MacroInput {
 #[proc_macro]
 pub fn states(input: TokenStream) -> TokenStream {
     let parsed_input = parse_macro_input!(input as MacroInput);
-
     // form reg and store type names from given peripheral name
     let register = format_ident!("{}Register", parsed_input.peripheral_name);
     let store = format_ident!("{}Store", parsed_input.peripheral_name);
@@ -89,28 +117,31 @@ pub fn states(input: TokenStream) -> TokenStream {
         });
     }
 
-    let store_variants: Vec<Variant> = parsed_input.states.iter().map(|x| {
-        let state_ident = x.ident.clone();
-        Variant{
-            attrs: Vec::new(),
-            ident: state_ident.clone(),
-            discriminant: None,
-            fields: Fields::Unnamed(
-                FieldsUnnamed {
+    let store_variants: Vec<Variant> = parsed_input
+        .states
+        .iter()
+        .map(|x| {
+            let state_ident = x.ident.clone();
+            Variant {
+                attrs: Vec::new(),
+                ident: state_ident.clone(),
+                discriminant: None,
+                fields: Fields::Unnamed(FieldsUnnamed {
                     paren_token: syn::token::Paren(Span::call_site()),
                     unnamed: Punctuated::from_iter(vec![Field {
-                    attrs: Vec::new(),
-                    vis: Visibility::Inherited,
-                    mutability: FieldMutability::None,
-                    ident: None,
-                    colon_token: None,
-                    ty: Type::Verbatim(quote! {
-                        #register<#state_ident>
-                    }),
-                }]),
-            })
-        }
-    }).collect();
+                        attrs: Vec::new(),
+                        vis: Visibility::Inherited,
+                        mutability: FieldMutability::None,
+                        ident: None,
+                        colon_token: None,
+                        ty: Type::Verbatim(quote! {
+                            #register<#state_ident>
+                        }),
+                    }]),
+                }),
+            }
+        })
+        .collect();
 
     // Expands to:
     // pub enum Nrf5xTempStore {
@@ -128,7 +159,7 @@ pub fn states(input: TokenStream) -> TokenStream {
 
     result.extend(quote! {
         pub struct #peripheral {}
-        
+
         // use kernel::power_manager::{Peripheral, StateEnum, Store};
         impl Peripheral for #peripheral {
             type StateEnum = #store;
@@ -138,7 +169,7 @@ pub fn states(input: TokenStream) -> TokenStream {
 
     for state in &parsed_input.states {
         let state_ident = state.ident.clone();
-        result.extend(quote!{
+        result.extend(quote! {
             impl State for #state_ident {
                 type Reg = #register<#state_ident>;
                 type StateEnum = #store;
@@ -151,9 +182,9 @@ pub fn states(input: TokenStream) -> TokenStream {
 
     for state in &parsed_input.states {
         let state_trait = format_ident!("{}State", state.ident.clone());
-        result.extend(quote!{
+        result.extend(quote! {
             #[allow(dead_code)]
-            trait #state_trait {} 
+            trait #state_trait {}
         });
     }
 
@@ -164,18 +195,18 @@ pub fn states(input: TokenStream) -> TokenStream {
                 continue;
             }
             let state_trait = format_ident!("{}State{}State", state1.ident, state2.ident);
-            result.extend(quote!{
+            result.extend(quote! {
                 #[allow(dead_code)]
-                trait #state_trait : State {} 
+                trait #state_trait : State {}
             });
             for variant in parsed_input.states.iter() {
                 let variant_ident = variant.ident.clone();
-                result.extend(quote!{
-                    impl #state_trait for #variant_ident {} 
+                result.extend(quote! {
+                    impl #state_trait for #variant_ident {}
                 });
             }
 
-            result.extend(quote!{
+            result.extend(quote! {
                 impl<S: #state_trait> ReadWriteRegister<u32, EventDataReady::Register, S> {
                     fn write(&self, val: FieldValue<u32, EventDataReady::Register>) {
                         self.reg.write(val);
@@ -199,7 +230,7 @@ pub fn states(input: TokenStream) -> TokenStream {
 
     for state in &parsed_input.states {
         let state_ident = state.ident.clone();
-        result.extend(quote!{
+        result.extend(quote! {
             impl TryFrom<#store> for #register<#state_ident> {
                 type Error = (kernel::ErrorCode, #store);
                 fn try_from(store: #store) -> Result<Self, Self::Error> {
@@ -227,11 +258,12 @@ pub fn states(input: TokenStream) -> TokenStream {
     }
 
     for state in &parsed_input.states {
-        let state_ident = state.ident.clone(); 
-        for transition in &state.transitions {
+        let state_ident = state.ident.clone();
+        for transition_states in &state.transitions {
+            let transition = transition_states.ident.clone();
             let step_transition = format_ident!("Step{}", transition);
             let into_fn = format_ident!("into_{}", transition.to_string().to_lowercase());
-            result.extend(quote!{
+            result.extend(quote! {
                 impl #step_transition for #register<#state_ident> {
                     fn #into_fn<PM: PowerManager<#peripheral>>(
                         self,
@@ -259,7 +291,7 @@ pub fn states(input: TokenStream) -> TokenStream {
     // }
     for state in &parsed_input.states {
         let state_ident = state.ident.clone();
-        result.extend(quote!{
+        result.extend(quote! {
             impl From<#register<#state_ident>> for #store {
                 fn from(reg: #register<#state_ident>) -> Self {
                     #store::#state_ident(reg)
@@ -268,14 +300,13 @@ pub fn states(input: TokenStream) -> TokenStream {
         });
     }
 
-
-    result.extend(quote!{
+    result.extend(quote! {
         pub enum #storable {
             #(#store_variants),*
         }
     });
 
-    result.extend(quote!{
+    result.extend(quote! {
         #[allow(dead_code)]
         struct WriteRegister<T: UIntLike, R: RegisterLongName, S: State> {
             reg: WriteOnly<T, R>,
@@ -309,8 +340,7 @@ pub fn states(input: TokenStream) -> TokenStream {
     result.into()
 }
 
-
-// // ORIGINAL attribute proc macro 
+// // ORIGINAL attribute proc macro
 //
 // #[derive(FromMeta)]
 // struct Args {
@@ -380,7 +410,7 @@ pub fn states(input: TokenStream) -> TokenStream {
 //     //     })
 //     // }
 //     // result.into()
-//     
+//
 //     let mut result = quote! {
 //         pub struct #register<S: kernel::power_manager::State>  {
 //             reg: StaticRef<#register_block<S>>,
@@ -411,7 +441,7 @@ pub fn states(input: TokenStream) -> TokenStream {
 //
 //     result.extend(quote! {
 //         pub struct #peripheral {}
-//         
+//
 //         // use kernel::power_manager::{Peripheral, StateEnum, Store};
 //         impl kernel::power_manager::Peripheral for #peripheral {
 //             type StateEnum = #store;
@@ -433,12 +463,12 @@ pub fn states(input: TokenStream) -> TokenStream {
 //
 //         });
 //     }
-//     
+//
 //     for state in state_enum.variants.iter() {
 //         let state_trait = format_ident!("{}State", state.ident);
 //         result.extend(quote!{
 //             #[allow(dead_code)]
-//             trait #state_trait {} 
+//             trait #state_trait {}
 //         });
 //     }
 //
@@ -451,11 +481,11 @@ pub fn states(input: TokenStream) -> TokenStream {
 //             let state_trait = format_ident!("{}State{}State", state1.ident, state2.ident);
 //             result.extend(quote!{
 //                 #[allow(dead_code)]
-//                 trait #state_trait : State {} 
+//                 trait #state_trait : State {}
 //             });
 //             for variant in state_enum.variants.iter() {
 //                 result.extend(quote!{
-//                     impl #state_trait for #variant {} 
+//             }
 //                 });
 //             }
 //         }
@@ -477,4 +507,3 @@ pub fn states(input: TokenStream) -> TokenStream {
 //
 //     result.into()
 // }
-
