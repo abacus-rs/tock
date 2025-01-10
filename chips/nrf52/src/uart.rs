@@ -13,83 +13,88 @@
 use core::cell::Cell;
 use core::cmp::min;
 use kernel::hil::uart;
-use kernel::power_manager::{Reg, State, StateEnum};
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
 use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 use nrf5x::pinmux;
-use power_states::states;
+use power_states::process_register_block;
 
 const UARTE_MAX_BUFFER_SIZE: u32 = 0xff;
 
 static mut BYTE: u8 = 0;
 
-pub const UARTE0_BASE: StaticRef<UarteRegisters> =
-    unsafe { StaticRef::new(0x40002000 as *const UarteRegisters) };
+pub const UARTE0_BASE: usize = 0x40002000;
 
-states!(
-    peripheral_name = "Nrf52Uarte",
-    registers = UarteRegisterBlock,
-    states = [
-        Off => [Active(RxIdle, TxIdle)],
-        Active(RxIdle, TxIdle) => [Active(RxIdle, Tx), Active(Rx, TxIdle), Off],
-        Active(Rx, TxIdle) => [Active(RxIdle, TxIdle), Active(Rx, Tx)],
-        Active(RxIdle, Tx) => [Active(RxIdle, TxIdle), Active(Rx, Tx)],
-        Active(Rx, Tx) => [Active(Rx, TxIdle), Active(RxIdle, Tx)],
-    ]
-);
+impl<S: State> Nrf52UarteRegister<S> {
+    // TODO: Likely want to add some capability here that restricts this.
+    pub fn new() -> Nrf52UarteRegister<S> {
+        let reg = unsafe { StaticRef::new(UARTE0_BASE as *const RegisterBlock<S>) };
+        Nrf52UarteRegister { reg: reg }
+    }
+}
 
 #[repr(C)]
-pub struct UarteRegisters {
-    task_startrx: WriteOnly<u32, Task::Register>,
-    task_stoprx: WriteOnly<u32, Task::Register>,
-    task_starttx: WriteOnly<u32, Task::Register>,
-    task_stoptx: WriteOnly<u32, Task::Register>,
+#[process_register_block(
+    peripheral_name = "Nrf52Uarte",
+    registers = RegisterBlock,
+    states = [
+        Off => [Active(RxIdle, TxIdle)],
+        Active(RxIdle, TxIdle) => [Active(RxIdle, Tx), Active(Rx, TxIdle), Off] {ActiveIdle},
+        Active(Rx, TxIdle) => [Active(RxIdle, TxIdle), Active(Rx, Tx)] {ActiveRx},
+        Active(RxIdle, Tx) => [Active(RxIdle, TxIdle), Active(Rx, Tx)] {ActiveTx},
+        Active(Rx, Tx) => [Active(Rx, TxIdle), Active(RxIdle, Tx)] {ActiveRxTx},
+    ]
+)]
+pub struct RegisterBlock<S: State> {
+    task_startrx: StateChangeRegister<u32, Task::Register, S>,
+    task_stoprx: StateChangeRegister<u32, Task::Register, S>,
+    task_starttx: StateChangeRegister<u32, Task::Register, S>,
+    task_stoptx: StateChangeRegister<u32, Task::Register, S>,
     _reserved1: [u32; 7],
     task_flush_rx: WriteOnly<u32, Task::Register>,
     _reserved2: [u32; 52],
-    event_cts: ReadWrite<u32, Event::Register>,
-    event_ncts: ReadWrite<u32, Event::Register>,
+    event_cts: ReadWriteRegister<u32, Event::Register, S>,
+    event_ncts: ReadWriteRegister<u32, Event::Register, S>,
     _reserved3: [u32; 2],
-    event_endrx: ReadWrite<u32, Event::Register>,
+    event_endrx: ReadWriteRegister<u32, Event::Register, S>,
     _reserved4: [u32; 3],
-    event_endtx: ReadWrite<u32, Event::Register>,
-    event_error: ReadWrite<u32, Event::Register>,
+    event_endtx: ReadWriteRegister<u32, Event::Register, S>,
+    event_error: ReadWriteRegister<u32, Event::Register, S>,
     _reserved6: [u32; 7],
-    event_rxto: ReadWrite<u32, Event::Register>,
+    event_rxto: ReadWriteRegister<u32, Event::Register, S>,
     _reserved7: [u32; 1],
-    event_rxstarted: ReadWrite<u32, Event::Register>,
-    event_txstarted: ReadWrite<u32, Event::Register>,
+    event_rxstarted: ReadWriteRegister<u32, Event::Register, S>,
+    event_txstarted: ReadWriteRegister<u32, Event::Register, S>,
     _reserved8: [u32; 1],
-    event_txstopped: ReadWrite<u32, Event::Register>,
+    event_txstopped: ReadWriteRegister<u32, Event::Register, S>,
     _reserved9: [u32; 41],
-    shorts: ReadWrite<u32, Shorts::Register>,
+    shorts: ReadWriteRegister<u32, Shorts::Register, S>,
     _reserved10: [u32; 64],
-    intenset: ReadWrite<u32, Interrupt::Register>,
-    intenclr: ReadWrite<u32, Interrupt::Register>,
+    intenset: ReadWriteRegister<u32, Interrupt::Register, S>,
+    intenclr: ReadWriteRegister<u32, Interrupt::Register, S>,
     _reserved11: [u32; 93],
-    errorsrc: ReadWrite<u32, ErrorSrc::Register>,
+    errorsrc: ReadWriteRegister<u32, ErrorSrc::Register, S>,
     _reserved12: [u32; 31],
-    enable: ReadWrite<u32, Uart::Register>,
+    enable: StateChangeRegister<u32, Uart::Register, S>,
     _reserved13: [u32; 1],
-    pselrts: ReadWrite<u32, Psel::Register>,
-    pseltxd: ReadWrite<u32, Psel::Register>,
-    pselcts: ReadWrite<u32, Psel::Register>,
-    pselrxd: ReadWrite<u32, Psel::Register>,
+    pselrts: ReadWriteRegister<u32, Psel::Register, S>,
+    pseltxd: ReadWriteRegister<u32, Psel::Register, S>,
+    pselcts: ReadWriteRegister<u32, Psel::Register, S>,
+    pselrxd: ReadWriteRegister<u32, Psel::Register, S>,
     _reserved14: [u32; 3],
-    baudrate: ReadWrite<u32, Baudrate::Register>,
+    baudrate: ReadWriteRegister<u32, Baudrate::Register, S>,
     _reserved15: [u32; 3],
-    rxd_ptr: ReadWrite<u32, Pointer::Register>,
-    rxd_maxcnt: ReadWrite<u32, Counter::Register>,
+    rxd_ptr: ReadWriteRegister<u32, Pointer::Register, S>,
+    rxd_maxcnt: ReadWriteRegister<u32, Counter::Register, S>,
     rxd_amount: ReadOnly<u32, Counter::Register>,
     _reserved16: [u32; 1],
-    txd_ptr: ReadWrite<u32, Pointer::Register>,
-    txd_maxcnt: ReadWrite<u32, Counter::Register>,
+    txd_ptr: ReadWriteRegister<u32, Pointer::Register, S>,
+    txd_maxcnt: ReadWriteRegister<u32, Counter::Register, S>,
     txd_amount: ReadOnly<u32, Counter::Register>,
     _reserved17: [u32; 7],
-    config: ReadWrite<u32, Config::Register>,
+    config: ReadWriteRegister<u32, Config::Register, S>,
 }
 
 register_bitfields! [u32,

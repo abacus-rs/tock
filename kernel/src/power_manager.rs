@@ -75,3 +75,5 @@ pub trait State {
     type Reg: Reg<StateEnum = Self::StateEnum>;
     type StateEnum: StateEnum;
 }
+
+pub trait SubState {}
