@@ -6,8 +6,8 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
-    token::Lt,
-    DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, Type, Variant, Visibility,
+    DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, ItemStruct, Type, Variant,
+    Visibility,
 };
 
 use std::collections::hash_set::HashSet;
@@ -17,6 +17,79 @@ struct State {
     shortname: syn::Ident,
     substates: Punctuated<syn::Ident, syn::Token![,]>,
     transitions: Punctuated<State, syn::Token![,]>,
+}
+
+impl State {
+    fn generate_state(
+        &self,
+        register_name: &Ident,
+        store_name: &Ident,
+    ) -> proc_macro2::TokenStream {
+        let mut result = proc_macro2::TokenStream::new();
+        let state_ident = self.ident.clone();
+
+        if self.substates.is_empty() {
+            result.extend(quote! {
+                pub struct #state_ident;
+            });
+        } else {
+            let generic_params = self.substates.iter().enumerate().map(|(index, _)| {
+                let entry = format!("T{}", index);
+                let generic = syn::Ident::new(&entry, Span::call_site());
+
+                quote! {
+                    #generic: SubState
+                }
+            });
+
+            let fields = self.substates.iter().enumerate().map(|(index, _)| {
+                let field_name = format!("associated_{}", index);
+                let generic_name = format!("T{}", index);
+
+                let generic = syn::Ident::new(&generic_name, Span::call_site());
+                let field = syn::Ident::new(&field_name, Span::call_site());
+
+                quote! {
+                    #field: PhantomData<#generic>
+                }
+            });
+
+            result.extend(quote! {
+                pub struct #state_ident<#(#generic_params),*> {
+                    #(#fields),*
+                }
+            });
+        }
+
+        result.extend(quote! {
+            impl State for #state_ident {
+                type Reg = #register_name<#state_ident>;
+                type StateEnum = #store_name;
+            }
+            impl Reg for #register_name<#state_ident> {
+                type StateEnum = #store_name;
+            }
+        });
+
+        // impl From<Nrf5xTempRegister<Off>> for Nrf5xTemperatureStore {
+        //     fn from(reg: Nrf5xTempRegister<Off>) -> Self {
+        //         Nrf5xTemperatureStore::Off(reg)
+        //     }
+        // }
+        result.extend(quote! {
+            impl From<#register_name<#state_ident>> for #store_name {
+                fn from(reg: #register_name<#state_ident>) -> Self {
+                    #store_name::#state_ident(reg)
+                }
+            }
+        });
+
+        result
+    }
+
+    fn generate_state_transitions(&self) -> TokenStream {
+        unimplemented!()
+    }
 }
 
 struct SubStates {
@@ -79,6 +152,88 @@ struct MacroInput {
     states: Punctuated<State, syn::Token![,]>,
 }
 
+impl MacroInput {
+    fn generate_state_store(
+        &self,
+        register_name: &Ident,
+        store_name: &Ident,
+    ) -> proc_macro2::TokenStream {
+        let store_variants: Vec<Variant> = self
+            .states
+            .iter()
+            .map(|state| {
+                let substate_iter = state.substates.iter().map(|substate| {
+                    quote! {
+                        #substate
+                    }
+                });
+
+                let substate_tokens = if state.substates.is_empty() {
+                    quote! {}
+                } else {
+                    quote! {<#(#substate_iter),*>}
+                };
+
+                let state_ident = state.ident.clone();
+                Variant {
+                    attrs: Vec::new(),
+                    ident: state.shortname.clone(),
+                    discriminant: None,
+                    fields: Fields::Unnamed(FieldsUnnamed {
+                        paren_token: syn::token::Paren(Span::call_site()),
+                        unnamed: Punctuated::from_iter(vec![Field {
+                            attrs: Vec::new(),
+                            vis: Visibility::Inherited,
+                            mutability: FieldMutability::None,
+                            ident: None,
+                            colon_token: None,
+                            ty: Type::Verbatim(quote! {
+                                #register_name<#state_ident #substate_tokens>
+                            }),
+                        }]),
+                    }),
+                }
+            })
+            .collect();
+
+        // Expands to:
+        // pub enum Nrf5xTempStore {
+        //     Off(Nrf5xTempRegister<state_ident>),
+        //     Reading(Nrf5xTempRegister<state_ident>),
+        // }
+        quote! {
+            pub enum #store_name{
+                #(#store_variants),*
+            }
+
+            impl Store for #store_name {}
+            impl StateEnum for #store_name {}
+        }
+    }
+
+    fn generate_states(
+        &self,
+        register_name: &Ident,
+        store_name: &Ident,
+    ) -> proc_macro2::TokenStream {
+        let mut created_states: HashSet<syn::Ident> = HashSet::new();
+
+        let mut output = proc_macro2::TokenStream::new();
+
+        for state in &self.states {
+            if created_states.contains(&state.ident) {
+                continue;
+            }
+
+            created_states.insert(state.ident.clone());
+
+            output.extend(state.generate_state(register_name, store_name));
+        }
+
+        output
+    }
+}
+
 fn add_imports() -> proc_macro2::TokenStream {
     quote!(
         use kernel::power_manager::{
@@ -112,24 +267,18 @@ impl Parse for MacroInput {
     }
 }
 
-#[proc_macro_attirbute]
+#[proc_macro_attribute]
 pub fn process_register(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let original_item = item.clone();
+    let original = item.clone();
 
     let parsed_input = parse_macro_input!(item as ItemStruct);
+    let parsed_attr = parse_macro_input!(attr as MacroInput);
+
+    original.into()
 }
 
 #[proc_macro_attribute]
 pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let original = item.clone();
-    let ast: DeriveInput = syn::parse(item).unwrap();
-
-    let name = &ast.ident;
-    let data = match &ast.data {
-        syn::Data::Struct(data) => data,
-        _ => panic!("Unsupported data type"),
-    };
-
     let parsed_input = parse_macro_input!(attr as MacroInput);
     // form reg and store type names from given peripheral name
     let register = format_ident!("{}Register", parsed_input.peripheral_name);
@@ -140,6 +289,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     let register_block = format_ident!("{}", register_block_str);
 
     let mut result = add_imports();
+
     let block = quote! {
         pub struct #register<S: kernel::power_manager::State>  {
             reg: StaticRef<#register_block<S>>,
@@ -148,101 +298,11 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     result.extend(block);
 
-    let mut created_states: HashSet<syn::Ident> = HashSet::new();
+    // Generate states
+    result.extend(parsed_input.generate_states(&register, &store));
 
-    for state in &parsed_input.states {
-        let state_ident = state.ident.clone();
-
-        if created_states.contains(&state_ident) {
-            continue;
-        }
-
-        created_states.insert(state_ident.clone());
-
-        if state.substates.is_empty() {
-            result.extend(quote! {
-                pub struct #state_ident;
-            });
-        } else {
-            let generic_params = state.substates.iter().enumerate().map(|(index, _)| {
-                let entry = format!("T{}", index);
-                let generic = syn::Ident::new(&entry, Span::call_site());
-
-                quote! {
-                    #generic: SubState
-                }
-            });
-
-            let fields = state.substates.iter().enumerate().map(|(index, _)| {
-                let field_name = format!("associated_{}", index);
-                let generic_name = format!("T{}", index);
-
-                let generic = syn::Ident::new(&generic_name, Span::call_site());
-                let field = syn::Ident::new(&field_name, Span::call_site());
-
-                quote! {
-                    #field: PhantomData<#generic>
-                }
-            });
-
-            result.extend(quote! {
-                pub struct #state_ident<#(#generic_params),*> {
-                    #(#fields),*
-                }
-            });
-        }
-    }
-
-    let store_variants: Vec<Variant> = parsed_input
-        .states
-        .iter()
-        .map(|state| {
-            let substate_iter = state.substates.iter().map(|substate| {
-                quote! {
-                    #substate
-                }
-            });
-
-            let substate_tokens = if state.substates.is_empty() {
-                quote! {}
-            } else {
-                quote! {<#(#substate_iter),*>}
-            };
-
-            let state_ident = state.ident.clone();
-            Variant {
-                attrs: Vec::new(),
-                ident: state.shortname.clone(),
-                discriminant: None,
-                fields: Fields::Unnamed(FieldsUnnamed {
-                    paren_token: syn::token::Paren(Span::call_site()),
-                    unnamed: Punctuated::from_iter(vec![Field {
-                        attrs: Vec::new(),
-                        vis: Visibility::Inherited,
-                        mutability: FieldMutability::None,
-                        ident: None,
-                        colon_token: None,
-                        ty: Type::Verbatim(quote! {
-                            #register<#state_ident #substate_tokens>
-                        }),
-                    }]),
-                }),
-            }
-        })
-        .collect();
-    // Expands to:
-    // pub enum Nrf5xTempStore {
-    //     Off(Nrf5xTempRegister<state_ident>),
-    //     Reading(Nrf5xTempRegister<state_ident>),
-    // }
-    result.extend(quote! {
-        pub enum #store {
-            #(#store_variants),*
-        }
-
-        impl Store for #store {}
-        impl StateEnum for #store {}
-    });
+    // Generate store enum
+    result.extend(parsed_input.generate_state_store(&register, &store));
 
     result.extend(quote! {
         pub struct #peripheral {}
@@ -254,19 +314,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         }
     });
 
-    for state in &parsed_input.states {
-        let state_ident = state.ident.clone();
-        result.extend(quote! {
-            impl State for #state_ident {
-                type Reg = #register<#state_ident>;
-                type StateEnum = #store;
-            }
-            impl Reg for #register<#state_ident> {
-                type StateEnum = #store;
-            }
-        });
-    }
-
+    /*
     for state in &parsed_input.states {
         let state_trait = format_ident!("{}State", state.shortname.clone());
         result.extend(quote! {
@@ -314,7 +362,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
             });
         }
     }
-
+    */
     for state in &parsed_input.states {
         let state_ident = state.ident.clone();
         result.extend(quote! {
@@ -330,76 +378,45 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         });
     }
 
-    let mut unique_states = HashSet::new();
+    /*
+        let mut unique_states = HashSet::new();
 
-    for state in &parsed_input.states {
-        if unique_states.contains(&state.ident) {
-            continue;
-        }
-
-        unique_states.insert(state.ident.clone());
-
-        let state_ident = state.ident.clone();
-        let step_trait = format_ident!("Step{}", state_ident);
-        let into_fn = format_ident!("into_{}", state_ident.to_string().to_lowercase());
-        result.extend(quote! {
-            trait #step_trait: Sized {
-                fn #into_fn<PM: PowerManager<#peripheral>>(
-                    self,
-                    _pm: &PM,
-                ) -> Result<#register<#state_ident>, PowerError<Self>>;
+        for state in &parsed_input.states {
+            if unique_states.contains(&state.ident) {
+                continue;
             }
-        });
-    }
 
-    for state in &parsed_input.states {
-        let state_ident = state.ident.clone();
-        for transition_states in &state.transitions {
-            let transition = transition_states.ident.clone();
-            let step_transition = format_ident!("Step{}", transition);
-            let into_fn = format_ident!("into_{}", transition.to_string().to_lowercase());
-            result.extend(quote! {
-                impl #step_transition for #register<#state_ident> {
-                    fn #into_fn<PM: PowerManager<#peripheral>>(
-                        self,
-                        _pm: &PM,
-                    ) -> Result<#register<#transition>, PowerError<Self>> {
-                        // TOOD: accept reg write/clear as input
-                        // self.task_stop.reg.write(TaskStop::ENABLE::SET);
+            unique_states.insert(state.ident.clone());
 
-                        unsafe {
-                            Ok(transmute::<
-                                #register<#state_ident>,
-                                #register<#transition>,
-                            >(self))
+            let state_ident = state.ident.clone();
+            for transition_states in &state.transitions {
+                let transition = transition_states.ident.clone();
+                let step_transition = format_ident!("Step{}", transition);
+                let into_fn = format_ident!("into_{}", transition.to_string().to_lowercase());
+                result.extend(quote! {
+                    impl #step_transition for #register<#state_ident> {
+                        fn #into_fn<PM: PowerManager<#peripheral>>(
+                            self,
+                            _pm: &PM,
+                        ) -> Result<#register<#transition>, PowerError<Self>> {
+                            // TOOD: accept reg write/clear as input
+                            // self.task_stop.reg.write(TaskStop::ENABLE::SET);
+
+                            unsafe {
+                                Ok(transmute::<
+                                    #register<#state_ident>,
+                                    #register<#transition>,
+                                >(self))
+                            }
                         }
                     }
-                }
-            });
-        }
-    }
-
-    // impl From<Nrf5xTempRegister<Off>> for Nrf5xTemperatureStore {
-    //     fn from(reg: Nrf5xTempRegister<Off>) -> Self {
-    //         Nrf5xTemperatureStore::Off(reg)
-    //     }
-    // }
-    for state in &parsed_input.states {
-        let state_ident = state.ident.clone();
-        result.extend(quote! {
-            impl From<#register<#state_ident>> for #store {
-                fn from(reg: #register<#state_ident>) -> Self {
-                    #store::#state_ident(reg)
-                }
+                });
             }
-        });
-    }
-
-    result.extend(quote! {
-        pub enum #storable {
-            #(#store_variants),*
         }
-    });
+
+        for state in &parsed_input.states {
+        }
+    */
 
     // We want to create:
     /*
@@ -410,6 +427,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
        }
     */
 
+    /*
     let register_types = data.fields.iter().map(|field| {
         let field_type = &field.ty;
 
@@ -443,6 +461,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
             panic!("Unknown register type");
         }
     });
+    */
     /*
         result.extend(quote! {
             #[allow(dead_code)]
@@ -476,7 +495,46 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         });
     */
 
-    let struct_original: proc_macro2::TokenStream = original.into();
-    result.extend(struct_original);
+    let ast: DeriveInput = syn::parse(item).unwrap();
+
+    let data = match &ast.data {
+        syn::Data::Struct(data) => data,
+        _ => panic!("Unsupported data type"),
+    };
+
+    let struct_name = format!("{}RegisterBlock", parsed_input.peripheral_name);
+    let struct_name_ident = format_ident!("{}", struct_name);
+
+    let field_details = data.fields.iter().map(|field| {
+        let field_type = &field.ty;
+        let field_name = &field.ident;
+
+        // DO ATTRIBUTE EXPANSION HERE
+
+        quote! {
+            #field_name: #field_type
+        }
+    });
+
+    let struct_output = quote! {
+        pub struct #struct_name_ident<S: State> {
+            temp_associate: PhantomData<S>,
+            #(#field_details),*
+        }
+    };
+
+    result.extend(struct_output);
     result.into()
 }
+
+/*
+
+THINGS TO GENERATE:
+
+StateStore
+States
+SubStates
+TryFrom
+From
+
+*/
