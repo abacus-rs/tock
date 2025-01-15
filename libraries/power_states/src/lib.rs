@@ -6,8 +6,8 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
-    DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, ItemStruct, Type, Variant,
-    Visibility,
+    DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, ItemStruct, PathArguments,
+    Type, Variant, Visibility,
 };
 
 use std::collections::hash_set::HashSet;
@@ -147,6 +147,79 @@ mod custom_keywords {
     syn::custom_keyword!(states);
 }
 
+#[derive(Clone)]
+enum RegisterType {
+    ReadOnly,
+    WriteOnly,
+    ReadWrite,
+    StateChange,
+}
+
+impl RegisterType {
+    fn to_ident(&self) -> Ident {
+        match self {
+            RegisterType::ReadOnly => format_ident!("ReadOnly"),
+            RegisterType::WriteOnly => format_ident!("WriteOnly"),
+            RegisterType::ReadWrite => format_ident!("ReadWrite"),
+            RegisterType::StateChange => format_ident!("StateChange"),
+        }
+    }
+}
+
+impl Parse for RegisterType {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ident: Ident = input.parse()?;
+        match ident.to_string().as_str() {
+            "ReadOnly" => Ok(RegisterType::ReadOnly),
+            "WriteOnly" => Ok(RegisterType::WriteOnly),
+            "ReadWrite" => Ok(RegisterType::ReadWrite),
+            "StateChange" => Ok(RegisterType::StateChange),
+            x => {
+                eprintln!("{:?}", x);
+                Err(syn::Error::new(ident.span(), "Unknown register type"))
+            }
+        }
+    }
+}
+
+struct Register {
+    name: Ident,
+    type_name: Ident,
+    valid_states: Punctuated<State, syn::Token![,]>,
+    register_shortname: syn::GenericArgument,
+    register_type: RegisterType,
+    register_bitwidth: Ident,
+}
+
+impl Register {}
+struct RegisterAttributes {
+    states: Punctuated<State, syn::Token![,]>,
+    register_type: RegisterType,
+    type_name: Ident,
+}
+
+impl Parse for RegisterAttributes {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let content;
+        let valid_states = bracketed!(content in input);
+        let states: Punctuated<State, syn::Token![,]> = content
+            .parse_terminated(State::parse, syn::Token![,])
+            .expect("1");
+
+        input.parse::<syn::Token![,]>()?;
+        let register_type: RegisterType = input.parse().expect("Invalid provided reg type.");
+
+        input.parse::<syn::Token![,]>()?;
+        let type_name: Ident = input.parse().expect("3");
+
+        Ok(RegisterAttributes {
+            states,
+            register_type,
+            type_name,
+        })
+    }
+}
+
 struct MacroInput {
     peripheral_name: String,
     states: Punctuated<State, syn::Token![,]>,
@@ -232,6 +305,35 @@ impl MacroInput {
 
         output
     }
+
+    fn generate_disjunctive_states(&self) -> proc_macro2::TokenStream {
+        // get unique state shortnames
+        let mut unique_states = HashSet::new();
+        for state in &self.states {
+            unique_states.insert(state.shortname.clone());
+        }
+
+        // for each unique state shortname, output trait of the form
+        // {ShortName1}State{ShortName2}State...{ShortNameN}State
+        // such that this accounts for all combinations of all states.
+        let mut output = proc_macro2::TokenStream::new();
+        for root_state in &unique_states {
+            let state_str = format!("{}State", root_state);
+            for comb_state in &unique_states {
+                if comb_state == root_state {
+                    continue;
+                }
+                let comb_state_str = format!("{}State", comb_state);
+                let state_str = format!("{}{}", state_str, comb_state_str);
+                let state_trait = format_ident!("{}", state_str);
+                output.extend(quote! {
+                    trait #state_trait: State {}
+                });
+            }
+        }
+
+        output
+    }
 }
 
 fn add_imports() -> proc_macro2::TokenStream {
@@ -281,7 +383,7 @@ pub fn process_register(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStream {
     let parsed_input = parse_macro_input!(attr as MacroInput);
     // form reg and store type names from given peripheral name
-    let register = format_ident!("{}Register", parsed_input.peripheral_name);
+    let register = format_ident!("{}Registers", parsed_input.peripheral_name);
     let store = format_ident!("{}Store", parsed_input.peripheral_name);
     let storable = format_ident!("Storable{}States", parsed_input.peripheral_name);
     let peripheral = format_ident!("{}Peripheral", parsed_input.peripheral_name);
@@ -293,6 +395,13 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     let block = quote! {
         pub struct #register<S: kernel::power_manager::State>  {
             reg: StaticRef<#register_block<S>>,
+        }
+
+        impl <S: State> Deref for #register<S> {
+            type Target = #register_block<S>;
+            fn deref(&self) -> &#register_block<S> {
+                self.reg.deref()
+            }
         }
     };
 
@@ -314,55 +423,8 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         }
     });
 
-    /*
-    for state in &parsed_input.states {
-        let state_trait = format_ident!("{}State", state.shortname.clone());
-        result.extend(quote! {
-            #[allow(dead_code)]
-            trait #state_trait {}
-        });
-    }
+    result.extend(parsed_input.generate_disjunctive_states());
 
-    if !parsed_input.states.is_empty() {
-        let state1 = parsed_input.states.get(0).unwrap();
-        for state2 in parsed_input.states.iter() {
-            if state1.shortname == state2.shortname {
-                continue;
-            }
-            let state_trait = format_ident!("{}State{}State", state1.shortname, state2.shortname);
-            result.extend(quote! {
-                #[allow(dead_code)]
-                trait #state_trait : State {}
-            });
-            for variant in parsed_input.states.iter() {
-                let variant_ident = variant.ident.clone();
-                result.extend(quote! {
-                    impl #state_trait for #variant_ident {}
-                });
-            }
-
-            result.extend(quote! {
-                impl<S: #state_trait> ReadWriteRegister<u32, EventDataReady::Register, S> {
-                    fn write(&self, val: FieldValue<u32, EventDataReady::Register>) {
-                        self.reg.write(val);
-                    }
-                }
-
-                impl<S: #state_trait> ReadWriteRegister<u32, Intenset::Register, S> {
-                    fn write(&self, val: FieldValue<u32, Intenset::Register>) {
-                        self.reg.write(val);
-                    }
-                }
-
-                impl<S: #state_trait> ReadWriteRegister<u32, Intenclr::Register, S> {
-                    fn write(&self, val: FieldValue<u32, Intenclr::Register>) {
-                        self.reg.write(val);
-                    }
-                }
-            });
-        }
-    }
-    */
     for state in &parsed_input.states {
         let state_ident = state.ident.clone();
         result.extend(quote! {
@@ -378,123 +440,6 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         });
     }
 
-    /*
-        let mut unique_states = HashSet::new();
-
-        for state in &parsed_input.states {
-            if unique_states.contains(&state.ident) {
-                continue;
-            }
-
-            unique_states.insert(state.ident.clone());
-
-            let state_ident = state.ident.clone();
-            for transition_states in &state.transitions {
-                let transition = transition_states.ident.clone();
-                let step_transition = format_ident!("Step{}", transition);
-                let into_fn = format_ident!("into_{}", transition.to_string().to_lowercase());
-                result.extend(quote! {
-                    impl #step_transition for #register<#state_ident> {
-                        fn #into_fn<PM: PowerManager<#peripheral>>(
-                            self,
-                            _pm: &PM,
-                        ) -> Result<#register<#transition>, PowerError<Self>> {
-                            // TOOD: accept reg write/clear as input
-                            // self.task_stop.reg.write(TaskStop::ENABLE::SET);
-
-                            unsafe {
-                                Ok(transmute::<
-                                    #register<#state_ident>,
-                                    #register<#transition>,
-                                >(self))
-                            }
-                        }
-                    }
-                });
-            }
-        }
-
-        for state in &parsed_input.states {
-        }
-    */
-
-    // We want to create:
-    /*
-       impl StateChangeRegister<u32, Task::Register, S, NAME>{
-           fn write(&self, val: FieldValue<u32, Task::Register>) {
-               self.reg.write(val);
-           }
-       }
-    */
-
-    /*
-    let register_types = data.fields.iter().map(|field| {
-        let field_type = &field.ty;
-
-        let type_string = quote! { #field_type }.to_string();
-
-        if type_string.contains("StateChangeRegister") {
-            quote! {
-                impl #field_type {
-
-                }
-            }
-        } else if type_string.contains("ReadWriteRegister") {
-            quote! {
-                impl #field_type {
-
-                }
-            }
-        } else if type_string.contains("ReadOnlyRegister") {
-            quote! {
-                impl #field_type {
-
-                }
-            }
-        } else if type_string.contains("WriteOnlyRegister") {
-            quote! {
-                impl #field_type {
-
-                }
-            }
-        } else {
-            panic!("Unknown register type");
-        }
-    });
-    */
-    /*
-        result.extend(quote! {
-            #[allow(dead_code)]
-            struct WriteRegister<T: UIntLike, R: RegisterLongName, S: State> {
-                reg: WriteOnly<T, R>,
-                associated_state: PhantomData<S>,
-            }
-
-            struct ReadRegister<T: UIntLike, R: RegisterLongName, S: State> {
-                reg: ReadOnly<T, R>,
-                associated_state: PhantomData<S>,
-            }
-
-            struct ReadWriteRegister<T: UIntLike, R: RegisterLongName, S: State> {
-                reg: ReadWrite<T, R>,
-                associated_state: PhantomData<S>,
-            }
-
-            struct StateChangeRegister<T: UIntLike, R: RegisterLongName, S: State> {
-                reg: WriteOnly<T, R>,
-                associated_state: PhantomData<S>,
-            }
-
-
-            impl<S: State> Deref for #register<S> {
-                type Target = RegisterBlock<S>;
-                fn deref(&self) -> &RegisterBlock<S> {
-                    self.reg.deref()
-                }
-            }
-        });
-    */
-
     let ast: DeriveInput = syn::parse(item).unwrap();
 
     let data = match &ast.data {
@@ -502,28 +447,162 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         _ => panic!("Unsupported data type"),
     };
 
+    let mut reg_vec: Vec<Register> = vec![];
+    // parse into the registers
+    for register in &data.fields {
+        let reg_attr = register.attrs.iter().find_map(|attr| {
+            // for each attribute in field attrs, leave doc macro comments
+            // and remove RegAttributes.
+            if attr.path().is_ident("RegAttributes") {
+                return Some(attr.parse_args::<RegisterAttributes>().unwrap());
+            }
+            None
+        });
+
+        if reg_attr.is_none() {
+            continue;
+        }
+
+        let reg_attr = reg_attr.unwrap();
+
+        if let Type::Path(type_path) = &register.ty {
+            if let Some(segment) = type_path.path.segments.last() {
+                let type_ident = &segment.ident; // Extract `WriteOnly`
+
+                // Check for generics
+                if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                    let generic_args = &args.args;
+                    if generic_args.len() != 2 {
+                        panic!("Expected 2 generic arguments");
+                    }
+                    let register_shortname = generic_args[1].clone();
+
+                    eprintln!("here we are");
+                    let register_bitwidth =
+                        if let syn::GenericArgument::Type(Type::Path(type_path)) = &generic_args[0]
+                        {
+                            let generic_ident = &type_path.path;
+                            generic_ident.segments.first().unwrap().ident.clone()
+                        } else {
+                            panic!("unreachable");
+                        };
+
+                    reg_vec.push(Register {
+                        name: register.ident.clone().unwrap(),
+                        type_name: reg_attr.type_name.clone(),
+                        valid_states: reg_attr.states,
+                        register_shortname,
+                        register_type: reg_attr.register_type,
+                        register_bitwidth,
+                    });
+                }
+            }
+        }
+    }
+
     let struct_name = format!("{}RegisterBlock", parsed_input.peripheral_name);
     let struct_name_ident = format_ident!("{}", struct_name);
 
     let field_details = data.fields.iter().map(|field| {
-        let field_type = &field.ty;
-        let field_name = &field.ident;
+        let field_type = field.ty.clone();
+        let field_name = field.ident.clone().unwrap();
 
-        // DO ATTRIBUTE EXPANSION HERE
+        let mut requires_gen = field.attrs.iter().any(|attr| {
+            // for each attribute in field attrs, leave all macros but
+            // RegAttributes.
+            if attr.path().is_ident("RegAttributes") {
+                return true;
+            }
+            false
+        });
 
+        let field_attr = field.attrs.iter().map(|attr| {
+            // for each attribute in field attrs, leave all macros but
+            // RegAttributes.
+            if attr.path().is_ident("RegAttributes") {
+                return quote!{};
+            } else {
+                return quote! {#attr};
+            }
+        });
+
+
+    // DO ATTRIBUTE EXPANSION HERE
+
+        if requires_gen {
+            let reg_attr = field.attrs.iter().find_map(|attr| {
+                // for each attribute in field attrs, leave doc macro comments
+                // and remove RegAttributes.
+                if attr.path().is_ident("RegAttributes") {
+                    return Some(attr.parse_args::<RegisterAttributes>().unwrap());
+                }
+                None
+            }).expect("reg attribute error");
+            if let Type::Path(type_path) = field_type.clone() {
+                if let Some(segment) = type_path.path.segments.last() {
+                    let type_ident = &segment.ident; // Extract `WriteOnly`
+
+                    // Check for generics
+                    if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                        let generic_args = &args.args;
+                        if generic_args.len() != 2 {
+                            panic!("Expected 2 generic arguments");
+                        }
+                        let register_shortname = generic_args[1].clone();
+
+                        let register_bitwidth =
+                        if let syn::GenericArgument::Type(Type::Path(type_path)) = &generic_args[0]
+                        {
+                            let generic_ident = &type_path.path;
+                            generic_ident.segments.first().unwrap().ident.clone()
+                        } else {
+                            panic!("unreachable");
+                        };
+
+                    reg_vec.push(Register {
+                        name: field_name.clone(),
+                        type_name: reg_attr.type_name.clone(),
+                        valid_states: reg_attr.states,
+                        register_shortname: register_shortname.clone(),
+                        register_type: reg_attr.register_type.clone(),
+                        register_bitwidth: register_bitwidth.clone(),
+                    });
+
+                    let internal_naming = reg_attr.type_name.clone();
+                    let reg_type = reg_attr.register_type.clone().to_ident();
+                    quote! {
+                        #(#field_attr)*
+                        pub #field_name: #reg_type<#register_bitwidth, #register_shortname, #internal_naming, S>
+                    }
+                } else {
+                    panic!("unreachable a")
+                }
+            } else {
+                panic!("unreachable b");
+            }
+        } else {
+            panic!("unreachable c");
+        }
+    } else {
         quote! {
+            #(#field_attr)*
             #field_name: #field_type
         }
-    });
+    }
+});
 
     let struct_output = quote! {
         pub struct #struct_name_ident<S: State> {
-            temp_associate: PhantomData<S>,
             #(#field_details),*
         }
     };
 
+    for reg in reg_vec {
+        //result.extend(reg.)
+    }
+
     result.extend(struct_output);
+
     result.into()
 }
 

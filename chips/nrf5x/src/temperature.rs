@@ -54,7 +54,7 @@ pub const TEMPERATURE_BASE: usize = 0x4000C000;
 struct RegisterBlock {
     /// Start temperature measurement
     /// Address: 0x000 - 0x004
-    //#[[Off], StateChange, TaskStart]
+    #[RegAttributes([Off], StateChange, TaskStart)]
     pub task_start: WriteOnly<u32, Task::Register>,
     /// Stop temperature measurement
     /// Address: 0x004 - 0x008
@@ -178,11 +178,11 @@ impl<'a, PM: PowerManager<Nrf5xTempPeripheral>> Temp<'a, PM> {
         });
     }
 
-    fn enable_interrupts<S: OffStateReadingState>(&self, reg: &Nrf5xTempRegister<S>) {
+    fn enable_interrupts<S: OffStateReadingState>(&self, reg: &Nrf5xTempRegisters<S>) {
         reg.intenset.write(Intenset::DATARDY::SET);
     }
 
-    fn disable_interrupts<S: OffStateReadingState>(&self, reg: &Nrf5xTempRegister<S>) {
+    fn disable_interrupts<S: OffStateReadingState>(&self, reg: &Nrf5xTempRegisters<S>) {
         reg.intenclr.write(Intenclr::DATARDY::SET);
     }
 }
@@ -192,12 +192,12 @@ impl<'a, PM: PowerManager<Nrf5xTempPeripheral>> kernel::hil::sensors::Temperatur
 {
     fn read_temperature(&self) -> Result<(), ErrorCode> {
         self.power_manager
-            .use_power_expecting::<_, Off>(|reg: Nrf5xTempRegister<Off>| {
+            .use_power_expecting::<_, Off>(|reg: Nrf5xTempRegisters<Off>| {
                 self.enable_interrupts(&reg);
                 reg.event_datardy.write(Event::READY::CLEAR);
                 let reg_result: Result<
-                    Nrf5xTempRegister<Reading>,
-                    PowerError<Nrf5xTempRegister<Off>>,
+                    Nrf5xTempRegisters<Reading>,
+                    PowerError<Nrf5xTempRegisters<Off>>,
                 > = reg.into_reading(self.power_manager);
 
                 match reg_result {
