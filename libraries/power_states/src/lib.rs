@@ -191,7 +191,13 @@ struct Register {
     register_bitwidth: Ident,
 }
 
-impl Register {}
+impl Register {
+    fn generate_register_name_type(&self) -> proc_macro2::TokenStream {
+        let type_name_ident = self.type_name.clone();
+        quote! { struct #type_name_ident {}}
+    }
+}
+
 struct RegisterAttributes {
     states: Punctuated<State, syn::Token![,]>,
     register_type: RegisterType,
@@ -449,6 +455,8 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     let mut reg_vec: Vec<Register> = vec![];
     // parse into the registers
+
+    /*
     for register in &data.fields {
         let reg_attr = register.attrs.iter().find_map(|attr| {
             // for each attribute in field attrs, leave doc macro comments
@@ -499,6 +507,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
             }
         }
     }
+    */
 
     let struct_name = format!("{}RegisterBlock", parsed_input.peripheral_name);
     let struct_name_ident = format_ident!("{}", struct_name);
@@ -569,10 +578,12 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
                     });
 
                     let internal_naming = reg_attr.type_name.clone();
-                    let reg_type = reg_attr.register_type.clone().to_ident();
+                    let reg_type = format_ident!("{}Register", reg_attr.register_type.clone().to_ident());
+
                     quote! {
                         #(#field_attr)*
                         pub #field_name: #reg_type<#register_bitwidth, #register_shortname, #internal_naming, S>
+
                     }
                 } else {
                     panic!("unreachable a")
@@ -586,7 +597,8 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     } else {
         quote! {
             #(#field_attr)*
-            #field_name: #field_type
+            pub #field_name: #field_type
+
         }
     }
 });
@@ -598,8 +610,35 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     };
 
     for reg in reg_vec {
-        //result.extend(reg.)
+        result.extend(reg.generate_register_name_type());
     }
+
+    // FIX ME
+    result.extend(quote! {
+        struct StateChangeRegister<T: UIntLike, R: RegisterLongName, Name, S: State> {
+            reg: WriteOnly<T, R>,
+            associated_state: PhantomData<S>,
+            associated_name: PhantomData<Name>,
+        }
+
+        struct ReadWriteRegister<T: UIntLike, R: RegisterLongName, Name, S: State> {
+            reg: ReadWrite<T, R>,
+            associated_state: PhantomData<S>,
+            associated_name: PhantomData<Name>,
+        }
+
+        struct ReadOnlyRegister<T: UIntLike, R: RegisterLongName, Name, S: State> {
+            reg: ReadOnly<T, R>,
+            associated_state: PhantomData<S>,
+            associated_name: PhantomData<Name>,
+        }
+
+        struct WriteOnlyRegister<T: UIntLike, R: RegisterLongName, Name, S: State> {
+            reg: WriteOnly<T, R>,
+            associated_state: PhantomData<S>,
+            associated_name: PhantomData<Name>,
+        }
+    });
 
     result.extend(struct_output);
 
