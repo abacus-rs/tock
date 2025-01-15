@@ -58,11 +58,13 @@ struct RegisterBlock {
     pub task_start: WriteOnly<u32, Task::Register>,
     /// Stop temperature measurement
     /// Address: 0x004 - 0x008
+    #[RegAttributes([Reading], StateChange, TaskStop)]
     pub task_stop: WriteOnly<u32, Task::Register>,
     /// Reserved
     pub _reserved1: [u32; 62],
     /// Temperature measurement complete, data ready
     /// Address: 0x100 - 0x104
+    #[RegAttributes([Reading], ReadWrite, EventDataReady)]
     pub event_datardy: ReadWrite<u32, Event::Register>,
     /// Reserved
     // Note, `inten` register on nRF51 is ignored because it's not supported by nRF52
@@ -78,6 +80,7 @@ struct RegisterBlock {
     pub _reserved3: [u32; 127],
     /// Temperature in °C (0.25° steps)
     /// Address: 0x508 - 0x50c
+    #[RegAttributes([Reading], ReadOnly, TemperatureRead)]
     pub temp: ReadOnly<u32, Temperature::Register>,
     /// Reserved
     pub _reserved4: [u32; 5],
