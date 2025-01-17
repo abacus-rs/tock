@@ -6,12 +6,13 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
-    DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, ItemStruct, PathArguments,
-    Type, Variant, Visibility,
+    DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, PathArguments, Type,
+    Variant, Visibility,
 };
 
 use std::collections::hash_set::HashSet;
 
+#[derive(Clone)]
 struct State {
     ident: syn::Ident,
     shortname: syn::Ident,
@@ -86,14 +87,6 @@ impl State {
 
         result
     }
-
-    fn generate_state_transitions(&self) -> TokenStream {
-        unimplemented!()
-    }
-}
-
-struct SubStates {
-    ident: syn::Ident,
 }
 
 impl Parse for State {
@@ -152,7 +145,7 @@ enum RegisterType {
     ReadOnly,
     WriteOnly,
     ReadWrite,
-    StateChange,
+    StateChange(State, syn::Path),
 }
 
 impl RegisterType {
@@ -161,7 +154,7 @@ impl RegisterType {
             RegisterType::ReadOnly => format_ident!("ReadOnly"),
             RegisterType::WriteOnly => format_ident!("WriteOnly"),
             RegisterType::ReadWrite => format_ident!("ReadWrite"),
-            RegisterType::StateChange => format_ident!("StateChange"),
+            RegisterType::StateChange(_, _) => format_ident!("StateChange"),
         }
     }
 }
@@ -173,7 +166,17 @@ impl Parse for RegisterType {
             "ReadOnly" => Ok(RegisterType::ReadOnly),
             "WriteOnly" => Ok(RegisterType::WriteOnly),
             "ReadWrite" => Ok(RegisterType::ReadWrite),
-            "StateChange" => Ok(RegisterType::StateChange),
+            "StateChange" => {
+                let content;
+                let _: syn::token::Paren = syn::parenthesized!(content in input);
+                let new_state = content.parse::<State>()?;
+
+                let _: syn::Token![,] = content.parse()?;
+
+                let instruction = content.parse::<syn::Path>().expect("registertype 2");
+
+                Ok(RegisterType::StateChange(new_state, instruction))
+            }
             x => {
                 eprintln!("{:?}", x);
                 Err(syn::Error::new(ident.span(), "Unknown register type"))
@@ -196,6 +199,96 @@ impl Register {
         let type_name_ident = self.type_name.clone();
         quote! { struct #type_name_ident {}}
     }
+
+    fn generate_register_op_bindings(
+        &self,
+        peripheral_name: &Ident,
+        register_name: &Ident,
+    ) -> proc_macro2::TokenStream {
+        // impl ReadWriteRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
+        let register_bitwidth = self.register_bitwidth.clone();
+        let register_shortname = self.register_shortname.clone();
+        let type_name = self.type_name.clone();
+        let validstate = self.valid_states.first().unwrap().ident.clone();
+
+        if self.valid_states.len() != 1 {
+            panic!("Only one valid state is supported for now.");
+        }
+
+        match &self.register_type {
+            RegisterType::ReadOnly => {
+                quote! {
+                    impl ReadOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
+                        pub fn get(&self) -> #register_bitwidth {
+                            self.reg.get()
+                        }
+                    }
+                }
+            }
+            RegisterType::WriteOnly => {
+                quote! {
+                    impl WriteOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
+                        pub fn set(&self, value: #register_bitwidth) {
+                            self.reg.set(value)
+                        }
+
+                        pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                            self.reg.write(value)
+                        }
+                    }
+                }
+            }
+            RegisterType::ReadWrite => {
+                quote! {
+                    impl ReadWriteRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
+                        pub fn get(&self) -> #register_bitwidth {
+                            self.reg.get()
+                        }
+                        pub fn set(&self, value: #register_bitwidth) {
+                            self.reg.set(value)
+                        }
+
+                        pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                            self.reg.write(value)
+                        }
+                    }
+                }
+            }
+            RegisterType::StateChange(state, instruction) => {
+                let to_state = state.ident.clone();
+                let reg_field_name = self.name.clone();
+                let trait_name = format_ident!("Step{}", to_state);
+                let from_state = self.valid_states.first().unwrap().ident.clone();
+
+                let to_state_fn_name =
+                    format_ident!("into_{}", to_state.to_string().to_lowercase());
+                quote! {
+                    trait #trait_name: Sized {
+                        fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                            self,
+                            pm: &PM,
+                        ) -> Result<#register_name<#to_state>, PowerError<Self>>;
+                    }
+
+                    impl #trait_name for #register_name<#from_state> {
+                        fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                            self,
+                            _pm: &PM,
+                        ) -> Result<#register_name<#to_state>, PowerError<Self>> {
+                            self.#reg_field_name.reg.write(#instruction);
+
+                            unsafe {
+                                Ok(transmute::<
+                                    #register_name<#from_state>,
+                                    #register_name<#to_state>,
+                                >(self))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 struct RegisterAttributes {
@@ -207,7 +300,7 @@ struct RegisterAttributes {
 impl Parse for RegisterAttributes {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let content;
-        let valid_states = bracketed!(content in input);
+        let _ = bracketed!(content in input);
         let states: Punctuated<State, syn::Token![,]> = content
             .parse_terminated(State::parse, syn::Token![,])
             .expect("1");
@@ -376,22 +469,11 @@ impl Parse for MacroInput {
 }
 
 #[proc_macro_attribute]
-pub fn process_register(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let original = item.clone();
-
-    let parsed_input = parse_macro_input!(item as ItemStruct);
-    let parsed_attr = parse_macro_input!(attr as MacroInput);
-
-    original.into()
-}
-
-#[proc_macro_attribute]
 pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStream {
     let parsed_input = parse_macro_input!(attr as MacroInput);
     // form reg and store type names from given peripheral name
     let register = format_ident!("{}Registers", parsed_input.peripheral_name);
     let store = format_ident!("{}Store", parsed_input.peripheral_name);
-    let storable = format_ident!("Storable{}States", parsed_input.peripheral_name);
     let peripheral = format_ident!("{}Peripheral", parsed_input.peripheral_name);
     let register_block_str = format!("{}{}", parsed_input.peripheral_name, "RegisterBlock");
     let register_block = format_ident!("{}", register_block_str);
@@ -502,6 +584,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
                         register_shortname,
                         register_type: reg_attr.register_type,
                         register_bitwidth,
+                        instruction: reg_attr.instruction.clone(),
                     });
                 }
             }
@@ -516,7 +599,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         let field_type = field.ty.clone();
         let field_name = field.ident.clone().unwrap();
 
-        let mut requires_gen = field.attrs.iter().any(|attr| {
+        let requires_gen = field.attrs.iter().any(|attr| {
             // for each attribute in field attrs, leave all macros but
             // RegAttributes.
             if attr.path().is_ident("RegAttributes") {
@@ -549,7 +632,6 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
             }).expect("reg attribute error");
             if let Type::Path(type_path) = field_type.clone() {
                 if let Some(segment) = type_path.path.segments.last() {
-                    let type_ident = &segment.ident; // Extract `WriteOnly`
 
                     // Check for generics
                     if let PathArguments::AngleBracketed(args) = &segment.arguments {
@@ -578,7 +660,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
                     });
 
                     let internal_naming = reg_attr.type_name.clone();
-                    let reg_type = format_ident!("{}Register", reg_attr.register_type.clone().to_ident());
+                    let reg_type = format_ident!("{}Register", &reg_attr.register_type.to_ident());
 
                     quote! {
                         #(#field_attr)*
@@ -611,6 +693,8 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     for reg in reg_vec {
         result.extend(reg.generate_register_name_type());
+        //  result.extend(reg.generate_state_transition(&peripheral, &register));
+        result.extend(reg.generate_register_op_bindings(&peripheral, &register));
     }
 
     // FIX ME
