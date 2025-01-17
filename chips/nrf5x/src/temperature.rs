@@ -18,7 +18,7 @@ use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, Writ
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 
-use power_states::{process_register, process_register_block};
+use power_states::process_register_block;
 
 pub const TEMPERATURE_BASE: usize = 0x4000C000;
 
@@ -33,7 +33,6 @@ pub const TEMPERATURE_BASE: usize = 0x4000C000;
 
 // -----------------------------------------------------------------------------------------
 // TODO: add these to macro
-
 /*impl<S: State> Nrf5xTempRegister<S> {
     // TODO: Likely want to add some capability here that restricts this.
     pub fn new() -> Nrf5xTempRegister<S> {
@@ -54,17 +53,16 @@ pub const TEMPERATURE_BASE: usize = 0x4000C000;
 struct RegisterBlock {
     /// Start temperature measurement
     /// Address: 0x000 - 0x004
-    #[RegAttributes([Off], StateChange, TaskStart)]
+    #[RegAttributes([Off], StateChange(Reading, Task::ENABLE::SET), TaskStart)]
     pub task_start: WriteOnly<u32, Task::Register>,
     /// Stop temperature measurement
     /// Address: 0x004 - 0x008
-    #[RegAttributes([Reading], StateChange, TaskStop)]
+    #[RegAttributes([Reading], StateChange(Off, Task::ENABLE::SET), TaskStop)]
     pub task_stop: WriteOnly<u32, Task::Register>,
     /// Reserved
     pub _reserved1: [u32; 62],
     /// Temperature measurement complete, data ready
     /// Address: 0x100 - 0x104
-    #[RegAttributes([Reading], ReadWrite, EventDataReady)]
     pub event_datardy: ReadWrite<u32, Event::Register>,
     /// Reserved
     // Note, `inten` register on nRF51 is ignored because it's not supported by nRF52
@@ -181,11 +179,11 @@ impl<'a, PM: PowerManager<Nrf5xTempPeripheral>> Temp<'a, PM> {
         });
     }
 
-    fn enable_interrupts<S: OffStateReadingState>(&self, reg: &Nrf5xTempRegisters<S>) {
+    fn enable_interrupts<S: State>(&self, reg: &Nrf5xTempRegisters<S>) {
         reg.intenset.write(Intenset::DATARDY::SET);
     }
 
-    fn disable_interrupts<S: OffStateReadingState>(&self, reg: &Nrf5xTempRegisters<S>) {
+    fn disable_interrupts<S: State>(&self, reg: &Nrf5xTempRegisters<S>) {
         reg.intenclr.write(Intenclr::DATARDY::SET);
     }
 }
