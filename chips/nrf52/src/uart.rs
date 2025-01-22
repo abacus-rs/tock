@@ -19,6 +19,7 @@ use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, Writ
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 use nrf5x::pinmux;
+
 use power_states::process_register_block;
 
 const UARTE_MAX_BUFFER_SIZE: u32 = 0xff;
@@ -27,18 +28,12 @@ static mut BYTE: u8 = 0;
 
 pub const UARTE0_BASE: usize = 0x40002000;
 
-impl<S: State> Nrf52UarteRegister<S> {
-    // TODO: Likely want to add some capability here that restricts this.
-    pub fn new() -> Nrf52UarteRegister<S> {
-        let reg = unsafe { StaticRef::new(UARTE0_BASE as *const RegisterBlock<S>) };
-        Nrf52UarteRegister { reg: reg }
-    }
-}
+// pub const UARTE0_BASE: StaticRef<UarteRegisters> =
+//     unsafe { StaticRef::new(0x40002000 as *const UarteRegisters) };
 
 #[repr(C)]
 #[process_register_block(
     peripheral_name = "Nrf52Uarte",
-    registers = RegisterBlock,
     states = [
         Off => [Active(RxIdle, TxIdle)],
         Active(RxIdle, TxIdle) => [Active(RxIdle, Tx), Active(Rx, TxIdle), Off] {ActiveIdle},
@@ -47,54 +42,56 @@ impl<S: State> Nrf52UarteRegister<S> {
         Active(Rx, Tx) => [Active(Rx, TxIdle), Active(RxIdle, Tx)] {ActiveRxTx},
     ]
 )]
-pub struct RegisterBlock<S: State> {
-    task_startrx: StateChangeRegister<u32, Task::Register, S>,
-    task_stoprx: StateChangeRegister<u32, Task::Register, S>,
-    task_starttx: StateChangeRegister<u32, Task::Register, S>,
-    task_stoptx: StateChangeRegister<u32, Task::Register, S>,
+pub struct UarteRegisters {
+    /// This is a doc comment
+    #[RegAttributes([Active(RxIdle, Any)], StateChange(Active(Rx, Any), Task::ENABLE::SET), TaskStartRx)]
+    task_startrx: WriteOnly<u32, Task::Register>,
+    task_stoprx: WriteOnly<u32, Task::Register>,
+    task_starttx: WriteOnly<u32, Task::Register>,
+    task_stoptx: WriteOnly<u32, Task::Register>,
     _reserved1: [u32; 7],
     task_flush_rx: WriteOnly<u32, Task::Register>,
     _reserved2: [u32; 52],
-    event_cts: ReadWriteRegister<u32, Event::Register, S>,
-    event_ncts: ReadWriteRegister<u32, Event::Register, S>,
+    event_cts: ReadWrite<u32, Event::Register>,
+    event_ncts: ReadWrite<u32, Event::Register>,
     _reserved3: [u32; 2],
-    event_endrx: ReadWriteRegister<u32, Event::Register, S>,
+    event_endrx: ReadWrite<u32, Event::Register>,
     _reserved4: [u32; 3],
-    event_endtx: ReadWriteRegister<u32, Event::Register, S>,
-    event_error: ReadWriteRegister<u32, Event::Register, S>,
+    event_endtx: ReadWrite<u32, Event::Register>,
+    event_error: ReadWrite<u32, Event::Register>,
     _reserved6: [u32; 7],
-    event_rxto: ReadWriteRegister<u32, Event::Register, S>,
+    event_rxto: ReadWrite<u32, Event::Register>,
     _reserved7: [u32; 1],
-    event_rxstarted: ReadWriteRegister<u32, Event::Register, S>,
-    event_txstarted: ReadWriteRegister<u32, Event::Register, S>,
+    event_rxstarted: ReadWrite<u32, Event::Register>,
+    event_txstarted: ReadWrite<u32, Event::Register>,
     _reserved8: [u32; 1],
-    event_txstopped: ReadWriteRegister<u32, Event::Register, S>,
+    event_txstopped: ReadWrite<u32, Event::Register>,
     _reserved9: [u32; 41],
-    shorts: ReadWriteRegister<u32, Shorts::Register, S>,
+    shorts: ReadWrite<u32, Shorts::Register>,
     _reserved10: [u32; 64],
-    intenset: ReadWriteRegister<u32, Interrupt::Register, S>,
-    intenclr: ReadWriteRegister<u32, Interrupt::Register, S>,
+    intenset: ReadWrite<u32, Interrupt::Register>,
+    intenclr: ReadWrite<u32, Interrupt::Register>,
     _reserved11: [u32; 93],
-    errorsrc: ReadWriteRegister<u32, ErrorSrc::Register, S>,
+    errorsrc: ReadWrite<u32, ErrorSrc::Register>,
     _reserved12: [u32; 31],
-    enable: StateChangeRegister<u32, Uart::Register, S>,
+    enable: ReadWrite<u32, Uart::Register>,
     _reserved13: [u32; 1],
-    pselrts: ReadWriteRegister<u32, Psel::Register, S>,
-    pseltxd: ReadWriteRegister<u32, Psel::Register, S>,
-    pselcts: ReadWriteRegister<u32, Psel::Register, S>,
-    pselrxd: ReadWriteRegister<u32, Psel::Register, S>,
+    pselrts: ReadWrite<u32, Psel::Register>,
+    pseltxd: ReadWrite<u32, Psel::Register>,
+    pselcts: ReadWrite<u32, Psel::Register>,
+    pselrxd: ReadWrite<u32, Psel::Register>,
     _reserved14: [u32; 3],
-    baudrate: ReadWriteRegister<u32, Baudrate::Register, S>,
+    baudrate: ReadWrite<u32, Baudrate::Register>,
     _reserved15: [u32; 3],
-    rxd_ptr: ReadWriteRegister<u32, Pointer::Register, S>,
-    rxd_maxcnt: ReadWriteRegister<u32, Counter::Register, S>,
+    rxd_ptr: ReadWrite<u32, Pointer::Register>,
+    rxd_maxcnt: ReadWrite<u32, Counter::Register>,
     rxd_amount: ReadOnly<u32, Counter::Register>,
     _reserved16: [u32; 1],
-    txd_ptr: ReadWriteRegister<u32, Pointer::Register, S>,
-    txd_maxcnt: ReadWriteRegister<u32, Counter::Register, S>,
+    txd_ptr: ReadWrite<u32, Pointer::Register>,
+    txd_maxcnt: ReadWrite<u32, Counter::Register>,
     txd_amount: ReadOnly<u32, Counter::Register>,
     _reserved17: [u32; 7],
-    config: ReadWriteRegister<u32, Config::Register, S>,
+    config: ReadWrite<u32, Config::Register>,
 }
 
 register_bitfields! [u32,
@@ -181,8 +178,7 @@ register_bitfields! [u32,
 /// UARTE
 // It should never be instanced outside this module but because a static mutable reference to it
 // is exported outside this module it must be `pub`
-pub struct Uarte<'a> {
-    registers: StaticRef<UarteRegisters>,
+pub struct Uarte<'a, PM: PowerManager<Nrf52UartePeripheral>> {
     tx_client: OptionalCell<&'a dyn uart::TransmitClient>,
     tx_buffer: kernel::utilities::cells::TakeCell<'static, [u8]>,
     tx_len: Cell<usize>,
@@ -192,6 +188,7 @@ pub struct Uarte<'a> {
     rx_remaining_bytes: Cell<usize>,
     rx_abort_in_progress: Cell<bool>,
     offset: Cell<usize>,
+    power_manager: &'a PM,
 }
 
 #[derive(Copy, Clone)]
@@ -199,12 +196,11 @@ pub struct UARTParams {
     pub baud_rate: u32,
 }
 
-impl<'a> Uarte<'a> {
+impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
     /// Constructor
     // This should only be constructed once
-    pub const fn new(regs: StaticRef<UarteRegisters>) -> Uarte<'a> {
+    pub const fn new(pm: &'a PM) -> Uarte<'a, PM> {
         Uarte {
-            registers: regs,
             tx_client: OptionalCell::empty(),
             tx_buffer: kernel::utilities::cells::TakeCell::empty(),
             tx_len: Cell::new(0),
@@ -214,6 +210,7 @@ impl<'a> Uarte<'a> {
             rx_remaining_bytes: Cell::new(0),
             rx_abort_in_progress: Cell::new(false),
             offset: Cell::new(0),
+            power_manager: pm,
         }
     }
 
@@ -458,7 +455,7 @@ impl<'a> Uarte<'a> {
     }
 }
 
-impl<'a> uart::Transmit<'a> for Uarte<'a> {
+impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Transmit<'a> for Uarte<'a, PM> {
     fn set_transmit_client(&self, client: &'a dyn uart::TransmitClient) {
         self.tx_client.set(client);
     }
@@ -487,7 +484,7 @@ impl<'a> uart::Transmit<'a> for Uarte<'a> {
     }
 }
 
-impl<'a> uart::Configure for Uarte<'a> {
+impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Configure for Uarte<'a, PM> {
     fn configure(&self, params: uart::Parameters) -> Result<(), ErrorCode> {
         // These could probably be implemented, but are currently ignored, so
         // throw an error.
@@ -507,7 +504,7 @@ impl<'a> uart::Configure for Uarte<'a> {
     }
 }
 
-impl<'a> uart::Receive<'a> for Uarte<'a> {
+impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a, PM> {
     fn set_receive_client(&self, client: &'a dyn uart::ReceiveClient) {
         self.rx_client.set(client);
     }

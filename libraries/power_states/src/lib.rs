@@ -21,83 +21,114 @@ struct State {
 }
 
 impl State {
+    fn form_concrete_state_type(&self) -> proc_macro2::TokenStream {
+        let state_ident = self.ident.clone();
+
+        if self.substates.is_empty() {
+            quote! {
+                #state_ident
+            }
+        } else {
+            let args = self.substates.iter().map(|arg| {
+                quote! {
+                    #arg
+                }
+            });
+
+            let args_ident = quote! {#(#args),*};
+            quote!{
+                #state_ident<#args_ident>
+            }
+        }
+    }
+
     fn generate_state(
         &self,
         register_name: &Ident,
         store_name: &Ident,
+        struct_name: &proc_macro2::TokenStream,
     ) -> proc_macro2::TokenStream {
         let mut result = proc_macro2::TokenStream::new();
-        let state_ident = self.ident.clone();
 
+        let state_ident = self.ident.clone();
+        let struct_shortname = self.shortname.clone();
+        // Form struct name / generics in carrots
+
+        // Form full struct using formed name
         if self.substates.is_empty() {
             result.extend(quote! {
-                pub struct #state_ident;
+                impl State for #struct_name {
+                    type Reg = #register_name<#state_ident>;
+                    type StateEnum = #store_name;
+                }
+
+                impl Reg for #register_name<#struct_name> {
+                    type StateEnum = #store_name;
+                }
+
+                impl From<#register_name<#struct_name>> for #store_name {
+                    fn from(reg: #register_name<#struct_name>) -> Self {
+                        #store_name::#state_ident(reg)
+                    }
+                }
+           
+                impl TryFrom<#store_name> for #register_name<#struct_name> {
+                    type Error = (kernel::ErrorCode, #store_name);
+                    fn try_from(store: #store_name) -> Result<Self, Self::Error> {
+                        match store {
+                            #store_name::#state_ident(reg) => Ok(reg),
+                            _ => Err((kernel::ErrorCode::INVAL, store)),
+                        }
+                    }
+                }
             });
         } else {
-            let generic_params = self.substates.iter().enumerate().map(|(index, _)| {
-                let entry = format!("T{}", index);
-                let generic = syn::Ident::new(&entry, Span::call_site());
 
-                quote! {
-                    #generic: SubState
-                }
-            });
-
-            let fields = self.substates.iter().enumerate().map(|(index, _)| {
-                let field_name = format!("associated_{}", index);
-                let generic_name = format!("T{}", index);
-
-                let generic = syn::Ident::new(&generic_name, Span::call_site());
-                let field = syn::Ident::new(&field_name, Span::call_site());
-
-                quote! {
-                    #field: PhantomData<#generic>
-                }
-            });
+            let concrete_type = self.form_concrete_state_type();
 
             result.extend(quote! {
-                pub struct #state_ident<#(#generic_params),*> {
-                    #(#fields),*
+
+                impl State for #concrete_type {
+                    type Reg = #register_name<#concrete_type>;
+                    type StateEnum = #store_name;
+                }
+
+                impl Reg for #register_name<#concrete_type> {
+                    type StateEnum = #store_name;
+                }
+
+                impl From<#register_name<#concrete_type>> for #store_name {
+                    fn from(reg: #register_name<#concrete_type>) -> Self {
+                        #store_name::#struct_shortname(reg)
+                    }
+                }
+                
+                impl TryFrom<#store_name> for #register_name<#concrete_type> {
+                    type Error = (kernel::ErrorCode, #store_name);
+                    fn try_from(store: #store_name) -> Result<Self, Self::Error> {
+                        match store {
+                            #store_name::#struct_shortname(reg) => Ok(reg),
+                            _ => Err((kernel::ErrorCode::INVAL, store)),
+                        }
+                    }
                 }
             });
         }
-
-        result.extend(quote! {
-            impl State for #state_ident {
-                type Reg = #register_name<#state_ident>;
-                type StateEnum = #store_name;
-            }
-            impl Reg for #register_name<#state_ident> {
-                type StateEnum = #store_name;
-            }
-        });
-
-        // impl From<Nrf5xTempRegister<Off>> for Nrf5xTemperatureStore {
-        //     fn from(reg: Nrf5xTempRegister<Off>) -> Self {
-        //         Nrf5xTemperatureStore::Off(reg)
-        //     }
-        // }
-        result.extend(quote! {
-            impl From<#register_name<#state_ident>> for #store_name {
-                fn from(reg: #register_name<#state_ident>) -> Self {
-                    #store_name::#state_ident(reg)
-                }
-            }
-        });
-
+        
         result
     }
 }
 
 impl Parse for State {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let state: Ident = input.parse()?;
+        let state: Ident = input.parse().expect("state_parse 0");
 
         let substates = if input.peek(syn::token::Paren) {
             let content;
             let _: syn::token::Paren = syn::parenthesized!(content in input);
-            let substates: Punctuated<Ident, syn::Token![,]> =
-                content.parse_terminated(syn::Ident::parse, syn::Token![,])?;
+            let substates: Punctuated<Ident, syn::Token![,]> = content
+                .parse_terminated(syn::Ident::parse, syn::Token![,])
+                .expect("state_parse 1");
             Some(substates)
         } else {
             None
@@ -105,12 +136,12 @@ impl Parse for State {
         .unwrap_or_else(|| Punctuated::new());
 
         let (transitions, shortname) = if input.peek(syn::Token![=>]) {
-            input.parse::<syn::Token![=>]>()?;
+            input.parse::<syn::Token![=>]>().expect("state_parse 2");
             let content;
             let _: syn::token::Bracket = bracketed!(content in input);
             let transitions: Punctuated<State, syn::Token![,]> = content
                 .parse_terminated(State::parse, syn::Token![,])
-                .expect("0");
+                .expect("state_parse 3");
 
             let content;
 
@@ -255,13 +286,13 @@ impl Register {
                 }
             }
             RegisterType::StateChange(state, instruction) => {
-                let to_state = state.ident.clone();
+                let to_state = state.form_concrete_state_type();
                 let reg_field_name = self.name.clone();
-                let trait_name = format_ident!("Step{}", to_state);
-                let from_state = self.valid_states.first().unwrap().ident.clone();
+                let trait_name = format_ident!("Step{}", state.ident.clone().to_string());
+                let from_state = self.valid_states.first().unwrap().form_concrete_state_type();
 
                 let to_state_fn_name =
-                    format_ident!("into_{}", to_state.to_string().to_lowercase());
+                    format_ident!("into_{}", state.ident.clone().to_string().to_lowercase());
                 quote! {
                     trait #trait_name: Sized {
                         fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
@@ -280,7 +311,7 @@ impl Register {
                             unsafe {
                                 Ok(transmute::<
                                     #register_name<#from_state>,
-                                    #register_name<#to_state>,
+                                    #register_name<#to_state>
                                 >(self))
                             }
                         }
@@ -340,13 +371,17 @@ impl MacroInput {
                     }
                 });
 
+                let state_ident = state.ident.clone();
                 let substate_tokens = if state.substates.is_empty() {
-                    quote! {}
+                    quote! {
+                        #state_ident
+                    }
                 } else {
-                    quote! {<#(#substate_iter),*>}
+                    quote! {
+                        #state_ident<#(#substate_iter),*>
+                    }
                 };
 
-                let state_ident = state.ident.clone();
                 Variant {
                     attrs: Vec::new(),
                     ident: state.shortname.clone(),
@@ -360,7 +395,7 @@ impl MacroInput {
                             ident: None,
                             colon_token: None,
                             ty: Type::Verbatim(quote! {
-                                #register_name<#state_ident #substate_tokens>
+                                #register_name<#substate_tokens>
                             }),
                         }]),
                     }),
@@ -391,15 +426,69 @@ impl MacroInput {
         let mut created_states: HashSet<syn::Ident> = HashSet::new();
 
         let mut output = proc_macro2::TokenStream::new();
+        let mut unique_substates = HashSet::new();
 
         for state in &self.states {
-            if created_states.contains(&state.ident) {
-                continue;
+            let state_ident = state.ident.clone();
+
+            for substate in &state.substates {
+                unique_substates.insert(substate.clone());
             }
+            
+            let struct_name = if state.substates.is_empty() {
+                quote! {#state_ident}
+            } else {
+                let generic_params = state.substates.iter().enumerate().map(|(index, _)| {
+                    let entry = format!("T{}", index);
+                    let generic = syn::Ident::new(&entry, Span::call_site());
+
+                    quote! {
+                        #generic: SubState
+                    }
+                });
+
+                quote! {
+                    #state_ident<#(#generic_params),*>
+                }
+            };
+       
+            let fields = state.substates.iter().enumerate().map(|(index, _)| {
+                let field_name = format!("associated_{}", index);
+                let generic_name = format!("T{}", index);
+
+                let generic = syn::Ident::new(&generic_name, Span::call_site());
+                let field = syn::Ident::new(&field_name, Span::call_site());
+
+                quote! {
+                    #field: PhantomData<#generic>
+                }
+            });
+
+            if !created_states.contains(&state.ident) {
+                output.extend(
+                    quote!{
+                        pub struct #struct_name {
+                            #(#fields),*
+                        }
+                    }
+                );
+            }
+
+            
 
             created_states.insert(state.ident.clone());
 
-            output.extend(state.generate_state(register_name, store_name));
+            output.extend(state.generate_state(register_name, store_name, &struct_name));
+        }
+
+        // create substates 
+        for substate in unique_substates {
+            let substate_ident = format_ident!("{}", substate);
+            output.extend(quote! {
+                pub struct #substate_ident {}
+
+                impl SubState for #substate_ident {}
+            });
         }
 
         output
@@ -480,8 +569,9 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     let mut result = add_imports();
 
+    eprintln!("register: {:?}", register);
     let block = quote! {
-        pub struct #register<S: kernel::power_manager::State>  {
+        pub struct #register<S: kernel::power_manager::State> {
             reg: StaticRef<#register_block<S>>,
         }
 
@@ -513,20 +603,6 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     result.extend(parsed_input.generate_disjunctive_states());
 
-    for state in &parsed_input.states {
-        let state_ident = state.ident.clone();
-        result.extend(quote! {
-            impl TryFrom<#store> for #register<#state_ident> {
-                type Error = (kernel::ErrorCode, #store);
-                fn try_from(store: #store) -> Result<Self, Self::Error> {
-                    match store {
-                        #store::#state_ident(reg) => Ok(reg),
-                        _ => Err((kernel::ErrorCode::INVAL, store)),
-                    }
-                }
-            }
-        });
-    }
 
     let ast: DeriveInput = syn::parse(item).unwrap();
 
@@ -665,7 +741,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
                     quote! {
                         #(#field_attr)*
                         pub #field_name: #reg_type<#register_bitwidth, #register_shortname, #internal_naming, S>
-
+                    
                     }
                 } else {
                     panic!("unreachable a")
