@@ -46,8 +46,11 @@ pub struct UarteRegisters {
     /// This is a doc comment
     #[RegAttributes([Active(RxIdle, Any)], StateChange(Active(Rx, Any), Task::ENABLE::SET), TaskStartRx)]
     task_startrx: WriteOnly<u32, Task::Register>,
+    #[RegAttributes([Active(Rx, Any)], StateChange(Active(RxIdle, Any), Task::ENABLE::SET), TaskStopRx)]
     task_stoprx: WriteOnly<u32, Task::Register>,
+    #[RegAttributes([Active(TxIdle, Any)], StateChange(Active(Tx, Any), Task::ENABLE::SET), TaskStartTx)]
     task_starttx: WriteOnly<u32, Task::Register>,
+    #[RegAttributes([Active(Tx, Any)], StateChange(Active(TxIdle, Any), Task::ENABLE::SET), TaskStopTx)]
     task_stoptx: WriteOnly<u32, Task::Register>,
     _reserved1: [u32; 7],
     task_flush_rx: WriteOnly<u32, Task::Register>,
@@ -222,64 +225,72 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
         cts: Option<pinmux::Pinmux>,
         rts: Option<pinmux::Pinmux>,
     ) {
-        self.registers.pseltxd.write(Psel::PIN.val(txd.into()));
-        self.registers.pselrxd.write(Psel::PIN.val(rxd.into()));
-        cts.map_or_else(
-            || {
-                // If no CTS pin is provided, then we need to mark it as
-                // disconnected in the register.
-                self.registers.pselcts.write(Psel::CONNECT::SET);
-            },
-            |c| {
-                self.registers.pselcts.write(Psel::PIN.val(c.into()));
-            },
-        );
-        rts.map_or_else(
-            || {
-                // If no RTS pin is provided, then we need to mark it as
-                // disconnected in the register.
-                self.registers.pselrts.write(Psel::CONNECT::SET);
-            },
-            |r| {
-                self.registers.pselrts.write(Psel::PIN.val(r.into()));
-            },
-        );
+        self.power_manager
+            .use_power_expecting::<_, Off>(|registers| {
+                registers.pseltxd.write(Psel::PIN.val(txd.into()));
+                registers.pselrxd.write(Psel::PIN.val(rxd.into()));
 
-        // Make sure we clear the endtx interrupt since that is what we rely on
-        // to know when the DMA TX finishes. Normally, we clear this interrupt
-        // as we handle it, so this is not necessary. However, a bootloader (or
-        // some other startup code) may have setup TX interrupts, and there may
-        // be one pending. We clear it to be safe.
-        self.registers.event_endtx.write(Event::READY::CLEAR);
+                cts.map_or_else(
+                    || {
+                        // If no CTS pin is provided, then we need to mark it as
+                        // disconnected in the register.
+                        registers.pselcts.write(Psel::CONNECT::SET);
+                    },
+                    |c| {
+                        registers.pselcts.write(Psel::PIN.val(c.into()));
+                    },
+                );
+                rts.map_or_else(
+                    || {
+                        // If no RTS pin is provided, then we need to mark it as
+                        // disconnected in the register.
+                        registers.pselrts.write(Psel::CONNECT::SET);
+                    },
+                    |r| {
+                        registers.pselrts.write(Psel::PIN.val(r.into()));
+                    },
+                );
 
-        self.enable_uart();
+                // Make sure we clear the endtx interrupt since that is what we rely on
+                // to know when the DMA TX finishes. Normally, we clear this interrupt
+                // as we handle it, so this is not necessary. However, a bootloader (or
+                // some other startup code) may have setup TX interrupts, and there may
+                // be one pending. We clear it to be safe.
+                registers.event_endtx.write(Event::READY::CLEAR);
+
+                self.enable_uart(registers)
+            });
     }
 
-    fn set_baud_rate(&self, baud_rate: u32) {
+    fn set_baud_rate(&self, baud_rate: u32, registers: Nrf52UarteRegisters<Active<Any, Any>>) {
         match baud_rate {
-            1200 => self.registers.baudrate.set(0x0004F000),
-            2400 => self.registers.baudrate.set(0x0009D000),
-            4800 => self.registers.baudrate.set(0x0013B000),
-            9600 => self.registers.baudrate.set(0x00275000),
-            14400 => self.registers.baudrate.set(0x003AF000),
-            19200 => self.registers.baudrate.set(0x004EA000),
-            28800 => self.registers.baudrate.set(0x0075C000),
-            38400 => self.registers.baudrate.set(0x009D0000),
-            57600 => self.registers.baudrate.set(0x00EB0000),
-            76800 => self.registers.baudrate.set(0x013A9000),
-            115200 => self.registers.baudrate.set(0x01D60000),
-            230400 => self.registers.baudrate.set(0x03B00000),
-            250000 => self.registers.baudrate.set(0x04000000),
-            460800 => self.registers.baudrate.set(0x07400000),
-            921600 => self.registers.baudrate.set(0x0F000000),
-            1000000 => self.registers.baudrate.set(0x10000000),
-            _ => self.registers.baudrate.set(0x01D60000), //setting default to 115200
+            1200 => registers.baudrate.set(0x0004F000),
+            2400 => registers.baudrate.set(0x0009D000),
+            4800 => registers.baudrate.set(0x0013B000),
+            9600 => registers.baudrate.set(0x00275000),
+            14400 => registers.baudrate.set(0x003AF000),
+            19200 => registers.baudrate.set(0x004EA000),
+            28800 => registers.baudrate.set(0x0075C000),
+            38400 => registers.baudrate.set(0x009D0000),
+            57600 => registers.baudrate.set(0x00EB0000),
+            76800 => registers.baudrate.set(0x013A9000),
+            115200 => registers.baudrate.set(0x01D60000),
+            230400 => registers.baudrate.set(0x03B00000),
+            250000 => registers.baudrate.set(0x04000000),
+            460800 => registers.baudrate.set(0x07400000),
+            921600 => registers.baudrate.set(0x0F000000),
+            1000000 => registers.baudrate.set(0x10000000),
+            _ => registers.baudrate.set(0x01D60000), //setting default to 115200
         }
     }
 
     // Enable UART peripheral, this need to disabled for low power applications
-    fn enable_uart(&self) {
-        self.registers.enable.write(Uart::ENABLE::ON);
+    fn enable_uart(
+        &self,
+        registers: Nrf52UarteRegisters<Off>,
+    ) -> Nrf52UarteRegisters<Active<RxIdle, TxIdle>> {
+        registers.enable.write(Uart::ENABLE::ON);
+        unimplemented!()
     }
 
     #[allow(dead_code)]
