@@ -5,14 +5,14 @@ use syn::{
     bracketed,
     parse::{Parse, ParseStream},
     parse_macro_input,
-    punctuated::Punctuated,
+    punctuated::{self, Punctuated},
     DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, PathArguments, Type,
     Variant, Visibility,
 };
 
-use std::collections::hash_set::HashSet;
+use std::collections::{hash_set::HashSet, HashMap};
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
 struct State {
     ident: syn::Ident,
     shortname: syn::Ident,
@@ -47,6 +47,7 @@ impl State {
         register_name: &Ident,
         store_name: &Ident,
         struct_name: &proc_macro2::TokenStream,
+        any_type: bool
     ) -> proc_macro2::TokenStream {
         let mut result = proc_macro2::TokenStream::new();
 
@@ -86,8 +87,7 @@ impl State {
 
             let concrete_type = self.form_concrete_state_type();
 
-            result.extend(quote! {
-
+            result.extend(quote!{
                 impl State for #concrete_type {
                     type Reg = #register_name<#concrete_type>;
                     type StateEnum = #store_name;
@@ -96,23 +96,43 @@ impl State {
                 impl Reg for #register_name<#concrete_type> {
                     type StateEnum = #store_name;
                 }
-
-                impl From<#register_name<#concrete_type>> for #store_name {
-                    fn from(reg: #register_name<#concrete_type>) -> Self {
-                        #store_name::#struct_shortname(reg)
-                    }
-                }
                 
-                impl TryFrom<#store_name> for #register_name<#concrete_type> {
-                    type Error = (kernel::ErrorCode, #store_name);
-                    fn try_from(store: #store_name) -> Result<Self, Self::Error> {
-                        match store {
-                            #store_name::#struct_shortname(reg) => Ok(reg),
-                            _ => Err((kernel::ErrorCode::INVAL, store)),
+            });
+
+            if any_type {
+                result.extend(quote! {
+                    impl From<#register_name<#concrete_type>> for #store_name {
+                        fn from(reg: #register_name<#concrete_type>) -> Self {
+                            unimplemented!();
                         }
                     }
-                }
-            });
+
+                    impl TryFrom<#store_name> for #register_name<#concrete_type> {
+                        type Error = (kernel::ErrorCode, #store_name);
+                        fn try_from(store: #store_name) -> Result<Self, Self::Error> {
+                            unimplemented!();
+                        }
+                    }
+                });
+            } else {
+                result.extend(quote!{
+                    impl From<#register_name<#concrete_type>> for #store_name {
+                      fn from(reg: #register_name<#concrete_type>) -> Self {
+                          #store_name::#struct_shortname(reg)
+                      }
+                    }
+
+                    impl TryFrom<#store_name> for #register_name<#concrete_type> {
+                        type Error = (kernel::ErrorCode, #store_name);
+                        fn try_from(store: #store_name) -> Result<Self, Self::Error> {
+                            match store {
+                                #store_name::#struct_shortname(reg) => Ok(reg),
+                                _ => Err((kernel::ErrorCode::INVAL, store)),
+                            }
+                        }
+                    }
+                });
+            }
         }
         
         result
@@ -422,63 +442,102 @@ impl MacroInput {
         &self,
         register_name: &Ident,
         store_name: &Ident,
-    ) -> proc_macro2::TokenStream {
+    ) -> (proc_macro2::TokenStream, HashMap<String, State>) {
         let mut created_states: HashSet<syn::Ident> = HashSet::new();
 
         let mut output = proc_macro2::TokenStream::new();
         let mut unique_substates = HashSet::new();
+        unique_substates.insert(format_ident!("Any"));
 
+        let mut state_hash = HashSet::new();
+
+        let mut state_map = HashMap::new();
         for state in &self.states {
-            let state_ident = state.ident.clone();
+            // State hash map used for name mapping later.
+            state_map.insert(state.form_concrete_state_type().to_string(), state.clone());
 
-            for substate in &state.substates {
-                unique_substates.insert(substate.clone());
-            }
-            
-            let struct_name = if state.substates.is_empty() {
-                quote! {#state_ident}
-            } else {
-                let generic_params = state.substates.iter().enumerate().map(|(index, _)| {
-                    let entry = format!("T{}", index);
-                    let generic = syn::Ident::new(&entry, Span::call_site());
+            let mut state = state.clone();
+            let original_substates = state.substates.clone();
+            // We need to generate each substate as:
+            // 1. The specified state.
+            // 2. As potentially an any state.
+            // 3. As potentially all being any states.
+            for iter in 0..(&state.substates.len() + 2) {
+                let mut any_type = false;
+                state.substates = original_substates.clone();
+                
+                // Case (2) 
+                if iter < state.substates.len() {
+                    state.substates[iter] = format_ident!("Any");
+
+                    any_type = true;
+                }
+
+                // Case (3)
+                if iter == state.substates.len() {
+                    state.substates = state.substates.iter().map(|_| format_ident!("Any")).collect();
+                    any_type = true;
+                }                
+
+                let state_ident = state.ident.clone();
+
+                for substate in &state.substates {
+                    unique_substates.insert(substate.clone());
+                }
+
+                let struct_name = if state.substates.is_empty() {
+                    quote! {#state_ident}
+                } else {
+                    let generic_params = state.substates.iter().enumerate().map(|(index, _)| {
+                        let entry = format!("T{}", index);
+                        let generic = syn::Ident::new(&entry, Span::call_site());
+
+                        quote! {
+                            #generic: SubState
+                        }
+                    });
 
                     quote! {
-                        #generic: SubState
+                        #state_ident<#(#generic_params),*>
+                    }
+                };
+       
+                let fields = state.substates.iter().enumerate().map(|(index, _)| {
+                    let field_name = format!("associated_{}", index);
+                    let generic_name = format!("T{}", index);
+
+                    let generic = syn::Ident::new(&generic_name, Span::call_site());
+                    let field = syn::Ident::new(&field_name, Span::call_site());
+
+                    quote! {
+                        #field: PhantomData<#generic>
                     }
                 });
 
-                quote! {
-                    #state_ident<#(#generic_params),*>
+                let concrete_state_str = state.form_concrete_state_type().to_string();
+                eprintln!("concrete_state_str: {:?}", concrete_state_str); 
+                if state_hash.contains(&concrete_state_str) {
+                    eprintln!("match!");
+                    continue;
+                } else {
+                    state_hash.insert(concrete_state_str.clone());
                 }
-            };
-       
-            let fields = state.substates.iter().enumerate().map(|(index, _)| {
-                let field_name = format!("associated_{}", index);
-                let generic_name = format!("T{}", index);
 
-                let generic = syn::Ident::new(&generic_name, Span::call_site());
-                let field = syn::Ident::new(&field_name, Span::call_site());
-
-                quote! {
-                    #field: PhantomData<#generic>
-                }
-            });
-
-            if !created_states.contains(&state.ident) {
-                output.extend(
-                    quote!{
-                        pub struct #struct_name {
-                            #(#fields),*
+                if !created_states.contains(&state.ident) {
+                    output.extend(
+                        quote!{
+                            pub struct #struct_name {
+                                #(#fields),*
+                            }
                         }
-                    }
-                );
+                    );
+                    
+                    created_states.insert(state.ident.clone());
+                }
+                
+                
+                output.extend(state.generate_state(register_name, store_name, &struct_name, any_type));
             }
-
-            
-
-            created_states.insert(state.ident.clone());
-
-            output.extend(state.generate_state(register_name, store_name, &struct_name));
         }
 
         // create substates 
@@ -491,7 +550,7 @@ impl MacroInput {
             });
         }
 
-        output
+        (output, state_map)
     }
 
     fn generate_disjunctive_states(&self) -> proc_macro2::TokenStream {
@@ -586,7 +645,8 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     result.extend(block);
 
     // Generate states
-    result.extend(parsed_input.generate_states(&register, &store));
+    let (states_generated, state_map) = parsed_input.generate_states(&register, &store);
+    result.extend(states_generated);
 
     // Generate store enum
     result.extend(parsed_input.generate_state_store(&register, &store));
@@ -612,64 +672,8 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     };
 
     let mut reg_vec: Vec<Register> = vec![];
-    // parse into the registers
 
-    /*
-    for register in &data.fields {
-        let reg_attr = register.attrs.iter().find_map(|attr| {
-            // for each attribute in field attrs, leave doc macro comments
-            // and remove RegAttributes.
-            if attr.path().is_ident("RegAttributes") {
-                return Some(attr.parse_args::<RegisterAttributes>().unwrap());
-            }
-            None
-        });
-
-        if reg_attr.is_none() {
-            continue;
-        }
-
-        let reg_attr = reg_attr.unwrap();
-
-        if let Type::Path(type_path) = &register.ty {
-            if let Some(segment) = type_path.path.segments.last() {
-                let type_ident = &segment.ident; // Extract `WriteOnly`
-
-                // Check for generics
-                if let PathArguments::AngleBracketed(args) = &segment.arguments {
-                    let generic_args = &args.args;
-                    if generic_args.len() != 2 {
-                        panic!("Expected 2 generic arguments");
-                    }
-                    let register_shortname = generic_args[1].clone();
-
-                    eprintln!("here we are");
-                    let register_bitwidth =
-                        if let syn::GenericArgument::Type(Type::Path(type_path)) = &generic_args[0]
-                        {
-                            let generic_ident = &type_path.path;
-                            generic_ident.segments.first().unwrap().ident.clone()
-                        } else {
-                            panic!("unreachable");
-                        };
-
-                    reg_vec.push(Register {
-                        name: register.ident.clone().unwrap(),
-                        type_name: reg_attr.type_name.clone(),
-                        valid_states: reg_attr.states,
-                        register_shortname,
-                        register_type: reg_attr.register_type,
-                        register_bitwidth,
-                        instruction: reg_attr.instruction.clone(),
-                    });
-                }
-            }
-        }
-    }
-    */
-
-    let struct_name = format!("{}RegisterBlock", parsed_input.peripheral_name);
-    let struct_name_ident = format_ident!("{}", struct_name);
+    let struct_name_ident = format_ident!("{}RegisterBlock", parsed_input.peripheral_name);
 
     let field_details = data.fields.iter().map(|field| {
         let field_type = field.ty.clone();
