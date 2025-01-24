@@ -53,50 +53,75 @@ pub struct UarteRegisters {
     #[RegAttributes([Active(Any, Tx)], StateChange(Active(Any, TxIdle), Task::ENABLE::SET, stoptx), TaskStopTx)]
     task_stoptx: WriteOnly<u32, Task::Register>,
     _reserved1: [u32; 7],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, FlushRxTask)]
     task_flush_rx: WriteOnly<u32, Task::Register>,
     _reserved2: [u32; 52],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, CtsEvent)]
     event_cts: ReadWrite<u32, Event::Register>,
+    #[RegAttributes([Active(Any, Any)], ReadWrite, NctsEvent)]
     event_ncts: ReadWrite<u32, Event::Register>,
     _reserved3: [u32; 2],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, EndRxEvent)]
     event_endrx: ReadWrite<u32, Event::Register>,
     _reserved4: [u32; 3],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, EndTxEvent)]
     event_endtx: ReadWrite<u32, Event::Register>,
+    #[RegAttributes([Active(Any, Any)], ReadWrite, ErrorEvent)]
     event_error: ReadWrite<u32, Event::Register>,
     _reserved6: [u32; 7],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, RxToEvent)]
     event_rxto: ReadWrite<u32, Event::Register>,
     _reserved7: [u32; 1],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, RxStartEvent)]
     event_rxstarted: ReadWrite<u32, Event::Register>,
+    #[RegAttributes([Active(Any, Any)], ReadWrite, TxStartEvent)]
     event_txstarted: ReadWrite<u32, Event::Register>,
     _reserved8: [u32; 1],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, TxStopEvent)]
     event_txstopped: ReadWrite<u32, Event::Register>,
     _reserved9: [u32; 41],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, ShortsReg)]
     shorts: ReadWrite<u32, Shorts::Register>,
     _reserved10: [u32; 64],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, InterruptSet)]
     intenset: ReadWrite<u32, Interrupt::Register>,
+    #[RegAttributes([Active(Any, Any)], ReadWrite, InterruptClear)]
     intenclr: ReadWrite<u32, Interrupt::Register>,
     _reserved11: [u32; 93],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, Error)]
     errorsrc: ReadWrite<u32, ErrorSrc::Register>,
     _reserved12: [u32; 31],
     // TODO: Add multiple attributes (since this can do multiple)
     #[RegAttributes([Off], StateChange(Active(RxIdle, TxIdle), Uart::ENABLE::ON, enable), Enable)]
     enable: ReadWrite<u32, Uart::Register>,
     _reserved13: [u32; 1],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, PSelRts)]
+    #[RegAttributes([Off], ReadWrite, PSelRts)]
     pselrts: ReadWrite<u32, Psel::Register>,
+    #[RegAttributes([Off], ReadWrite, PSelTxd)]
     pseltxd: ReadWrite<u32, Psel::Register>,
+    #[RegAttributes([Off], ReadWrite, PSelCts)]
     pselcts: ReadWrite<u32, Psel::Register>,
+    #[RegAttributes([Off], ReadWrite, PSelRxd)]
     pselrxd: ReadWrite<u32, Psel::Register>,
     _reserved14: [u32; 3],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, BaudrateReg)]
     baudrate: ReadWrite<u32, Baudrate::Register>,
     _reserved15: [u32; 3],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, RxdPtr)]
     rxd_ptr: ReadWrite<u32, Pointer::Register>,
+    #[RegAttributes([Active(Any, Any)], ReadWrite, RxdMaxCnt)]
     rxd_maxcnt: ReadWrite<u32, Counter::Register>,
+    #[RegAttributes([Active(Any, Any)], ReadOnly, RxdAmount)]
     rxd_amount: ReadOnly<u32, Counter::Register>,
     _reserved16: [u32; 1],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, TxdPtr)]
     txd_ptr: ReadWrite<u32, Pointer::Register>,
+    #[RegAttributes([Active(Any, Any)], ReadWrite, TxdMaxCnt)]
     txd_maxcnt: ReadWrite<u32, Counter::Register>,
+    #[RegAttributes([Active(Any, Any)], ReadOnly, TxdAmount)]
     txd_amount: ReadOnly<u32, Counter::Register>,
     _reserved17: [u32; 7],
+    #[RegAttributes([Active(Any,Any)], ReadWrite, ConfigReg)]
     config: ReadWrite<u32, Config::Register>,
 }
 
@@ -300,20 +325,20 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
         self.registers.enable.write(Uart::ENABLE::OFF);
     }
 
-    fn enable_rx_interrupts(&self) {
-        self.registers.intenset.write(Interrupt::ENDRX::SET);
+    fn enable_rx_interrupts(&self, registers: Nrf52UarteRegisters<Active<Any, Any>>) {
+        registers.intenset.write(Interrupt::ENDRX::SET);
     }
 
-    fn enable_tx_interrupts(&self) {
-        self.registers.intenset.write(Interrupt::ENDTX::SET);
+    fn enable_tx_interrupts(&self, registers: Nrf52UarteRegisters<Active<Any, Any>>) {
+        registers.intenset.write(Interrupt::ENDTX::SET);
     }
 
-    fn disable_rx_interrupts(&self) {
-        self.registers.intenclr.write(Interrupt::ENDRX::SET);
+    fn disable_rx_interrupts(&self, registers: Nrf52UarteRegisters<Active<Any, Any>>) {
+        registers.intenclr.write(Interrupt::ENDRX::SET);
     }
 
-    fn disable_tx_interrupts(&self) {
-        self.registers.intenclr.write(Interrupt::ENDTX::SET);
+    fn disable_tx_interrupts(&self, registers: Nrf52UarteRegisters<Active<Any, Any>>) {
+        registers.intenclr.write(Interrupt::ENDTX::SET);
     }
 
     /// UART interrupt handler that listens for both tx_end and rx_end events

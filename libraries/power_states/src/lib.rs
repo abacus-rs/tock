@@ -268,7 +268,7 @@ impl Register {
         let register_bitwidth = self.register_bitwidth.clone();
         let register_shortname = self.register_shortname.clone();
         let type_name = self.type_name.clone();
-        let validstate = self.valid_states.first().expect("generate reg op bindings").ident.clone();
+        let validstate = self.valid_states.first().expect("generate reg op bindings").form_concrete_state_type();
 
         if self.valid_states.len() != 1 {
             panic!("Only one valid state is supported for now.");
