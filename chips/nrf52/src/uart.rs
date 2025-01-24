@@ -44,13 +44,13 @@ pub const UARTE0_BASE: usize = 0x40002000;
 )]
 pub struct UarteRegisters {
     /// This is a doc comment
-    #[RegAttributes([Active(RxIdle, Any)], StateChange(Active(Rx, Any), Task::ENABLE::SET), TaskStartRx)]
+    #[RegAttributes([Active(RxIdle, Any)], StateChange(Active(Rx, Any), Task::ENABLE::SET, startrx), TaskStartRx)]
     task_startrx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(Rx, Any)], StateChange(Active(RxIdle, Any), Task::ENABLE::SET), TaskStopRx)]
+    #[RegAttributes([Active(Rx, Any)], StateChange(Active(RxIdle, Any), Task::ENABLE::SET, stoprx), TaskStopRx)]
     task_stoprx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(TxIdle, Any)], StateChange(Active(Tx, Any), Task::ENABLE::SET), TaskStartTx)]
+    #[RegAttributes([Active(Any, TxIdle)], StateChange(Active(Any, Tx), Task::ENABLE::SET, starttx), TaskStartTx)]
     task_starttx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(Tx, Any)], StateChange(Active(TxIdle, Any), Task::ENABLE::SET), TaskStopTx)]
+    #[RegAttributes([Active(Any, Tx)], StateChange(Active(Any, TxIdle), Task::ENABLE::SET, stoptx), TaskStopTx)]
     task_stoptx: WriteOnly<u32, Task::Register>,
     _reserved1: [u32; 7],
     task_flush_rx: WriteOnly<u32, Task::Register>,
@@ -77,8 +77,11 @@ pub struct UarteRegisters {
     _reserved11: [u32; 93],
     errorsrc: ReadWrite<u32, ErrorSrc::Register>,
     _reserved12: [u32; 31],
+    // TODO: Add multiple attributes (since this can do multiple)
+    #[RegAttributes([Off], StateChange(Active(RxIdle, TxIdle), Uart::ENABLE::ON, enable), Enable)]
     enable: ReadWrite<u32, Uart::Register>,
     _reserved13: [u32; 1],
+    #[RegAttributes([Active(Any, Any)], ReadWrite, PSelRts)]
     pselrts: ReadWrite<u32, Psel::Register>,
     pseltxd: ReadWrite<u32, Psel::Register>,
     pselcts: ReadWrite<u32, Psel::Register>,
@@ -289,8 +292,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
         &self,
         registers: Nrf52UarteRegisters<Off>,
     ) -> Nrf52UarteRegisters<Active<RxIdle, TxIdle>> {
-        registers.enable.write(Uart::ENABLE::ON);
-        unimplemented!()
+        registers.into_enable(self.pm)
     }
 
     #[allow(dead_code)]
