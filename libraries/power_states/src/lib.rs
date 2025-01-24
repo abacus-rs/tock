@@ -86,7 +86,6 @@ impl State {
         } else {
 
             let concrete_type = self.form_concrete_state_type();
-
             result.extend(quote!{
                 impl State for #concrete_type {
                     type Reg = #register_name<#concrete_type>;
@@ -196,7 +195,7 @@ enum RegisterType {
     ReadOnly,
     WriteOnly,
     ReadWrite,
-    StateChange(State, syn::Path),
+    StateChange(State, syn::Path, Ident),
 }
 
 impl RegisterType {
@@ -205,7 +204,7 @@ impl RegisterType {
             RegisterType::ReadOnly => format_ident!("ReadOnly"),
             RegisterType::WriteOnly => format_ident!("WriteOnly"),
             RegisterType::ReadWrite => format_ident!("ReadWrite"),
-            RegisterType::StateChange(_, _) => format_ident!("StateChange"),
+            RegisterType::StateChange(_, _, _) => format_ident!("StateChange"),
         }
     }
 }
@@ -226,7 +225,16 @@ impl Parse for RegisterType {
 
                 let instruction = content.parse::<syn::Path>().expect("registertype 2");
 
-                Ok(RegisterType::StateChange(new_state, instruction))
+            
+                if new_state.substates.is_empty() {
+                    let state_shortname = new_state.ident.clone();
+                    return Ok(RegisterType::StateChange(new_state, instruction, state_shortname));
+                } else {
+                    let _: syn::Token![,] = content.parse().expect("final comma in register state change");
+                    let state_shortname = content.parse::<syn::Ident>().expect("registertype 3");
+                    return Ok(RegisterType::StateChange(new_state, instruction, state_shortname))
+                } 
+
             }
             x => {
                 eprintln!("{:?}", x);
@@ -260,7 +268,7 @@ impl Register {
         let register_bitwidth = self.register_bitwidth.clone();
         let register_shortname = self.register_shortname.clone();
         let type_name = self.type_name.clone();
-        let validstate = self.valid_states.first().unwrap().ident.clone();
+        let validstate = self.valid_states.first().expect("generate reg op bindings").ident.clone();
 
         if self.valid_states.len() != 1 {
             panic!("Only one valid state is supported for now.");
@@ -305,34 +313,96 @@ impl Register {
                     }
                 }
             }
-            RegisterType::StateChange(state, instruction) => {
-                let to_state = state.form_concrete_state_type();
+            RegisterType::StateChange(state, instruction, state_shortname) => {
                 let reg_field_name = self.name.clone();
-                let trait_name = format_ident!("Step{}", state.ident.clone().to_string());
-                let from_state = self.valid_states.first().unwrap().form_concrete_state_type();
+                let trait_name = format_ident!("Step{}", state_shortname);
+
+                // Determine if this state contains an Any substate.
+                let is_anytype = state.substates.iter().any(|substate| substate.to_string() == "Any");
 
                 let to_state_fn_name =
-                    format_ident!("into_{}", state.ident.clone().to_string().to_lowercase());
-                quote! {
-                    trait #trait_name: Sized {
-                        fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
-                            self,
-                            pm: &PM,
-                        ) -> Result<#register_name<#to_state>, PowerError<Self>>;
-                    }
+                    format_ident!("into_{}", state_shortname.to_string().to_lowercase());
 
-                    impl #trait_name for #register_name<#from_state> {
-                        fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
-                            self,
-                            _pm: &PM,
-                        ) -> Result<#register_name<#to_state>, PowerError<Self>> {
-                            self.#reg_field_name.reg.write(#instruction);
+                if is_anytype {
+                    // Create copy of state to change
+                    let mut state = state.clone();
+                    let from_state = self.valid_states.first().expect("state valid").clone();
 
-                            unsafe {
-                                Ok(transmute::<
-                                    #register_name<#from_state>,
-                                    #register_name<#to_state>
-                                >(self))
+                    // An Any substate means an state is valid. To mock up this behavior in the 
+                    // type system, we must replace the Any substate with a generic type.
+                    let map_any = |mut state: State| {
+                        // For any substate that is Any, replace with generic T.
+                        
+                        for substate in state.substates.iter_mut() {
+                            if substate.to_string() == "Any" {
+                                *substate = format_ident!("T");
+                            }
+                        }
+
+                        state.form_concrete_state_type()
+
+                    };
+
+                    let to_state = map_any(state);
+                    let from_state = map_any(from_state);
+
+                    quote! {
+                        trait #trait_name<T: SubState>: Sized
+                        where 
+                            #to_state: State,
+                            #from_state: State
+                        {
+                            fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                                self,
+                                pm: &PM,
+                            ) -> Result<#register_name<#to_state>, PowerError<Self>>;
+                        }
+
+                        impl <T: SubState> #trait_name<T> for #register_name<#from_state> 
+                        where 
+                            #to_state: State,
+                            #from_state: State
+                        {
+                            fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                                self,
+                                _pm: &PM,
+                            ) -> Result<#register_name<#to_state>, PowerError<Self>> {
+                                self.#reg_field_name.reg.write(#instruction);
+
+                                unsafe {
+                                    Ok(transmute::<
+                                        #register_name<#from_state>,
+                                        #register_name<#to_state>
+                                    >(self))
+                                }
+                            }
+                        }
+                    }                   
+                } else { 
+                    let from_state = self.valid_states.first().expect("state change unwrap").form_concrete_state_type();
+                    let to_state = state.form_concrete_state_type();
+                    
+                    quote! {
+                        trait #trait_name: Sized {
+                            fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                                self,
+                                pm: &PM,
+                            ) -> Result<#register_name<#to_state>, PowerError<Self>>;
+                        }
+
+                        impl #trait_name for #register_name<#from_state> {
+                            fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                                self,
+                                _pm: &PM,
+                            ) -> Result<#register_name<#to_state>, PowerError<Self>> {
+                                self.#reg_field_name.reg.write(#instruction);
+
+                                unsafe {
+                                    Ok(transmute::<
+                                        #register_name<#from_state>,
+                                        #register_name<#to_state>
+                                    >(self))
+                                }
                             }
                         }
                     }
@@ -664,7 +734,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     result.extend(parsed_input.generate_disjunctive_states());
 
 
-    let ast: DeriveInput = syn::parse(item).unwrap();
+    let ast: DeriveInput = syn::parse(item).expect("ast unwrap");
 
     let data = match &ast.data {
         syn::Data::Struct(data) => data,
@@ -677,7 +747,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     let field_details = data.fields.iter().map(|field| {
         let field_type = field.ty.clone();
-        let field_name = field.ident.clone().unwrap();
+        let field_name = field.ident.clone().expect("field details");
 
         let requires_gen = field.attrs.iter().any(|attr| {
             // for each attribute in field attrs, leave all macros but
@@ -706,7 +776,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
                 // for each attribute in field attrs, leave doc macro comments
                 // and remove RegAttributes.
                 if attr.path().is_ident("RegAttributes") {
-                    return Some(attr.parse_args::<RegisterAttributes>().unwrap());
+                    return Some(attr.parse_args::<RegisterAttributes>().expect("requires gen"));
                 }
                 None
             }).expect("reg attribute error");
@@ -725,7 +795,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
                         if let syn::GenericArgument::Type(Type::Path(type_path)) = &generic_args[0]
                         {
                             let generic_ident = &type_path.path;
-                            generic_ident.segments.first().unwrap().ident.clone()
+                            generic_ident.segments.first().expect("inner req gen").ident.clone()
                         } else {
                             panic!("unreachable");
                         };
