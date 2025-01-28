@@ -19,6 +19,13 @@ pub trait PowerManager<P: Peripheral> {
         // closure and should return an error.
         let stored_state = self.retrieve_power()?;
 
+        // The stored_state is consumed with the `try_from` operation. For the case of
+        // the Any Type, we need to "know" what the original state was. Likewise, we store
+        // a copy of the StateEnum to be used for the Any type "recover" operation.
+        // TODO: We can make this conditional for only if S contains an Any type. Maybe
+        // overkill?
+        let any_state_copy = stored_state.copy_store();
+
         // The function caller denotes the expected state. We obtain the stored state from
         // the power manager. If the stored state is not the expected state, we return an
         // error. In all cases, we must be sure the optionalcell is never empty when we
@@ -69,11 +76,28 @@ where
 
 pub trait Store {}
 
-pub trait StateEnum {}
+pub trait StateEnum {
+    // The existence of this method destroys all guarantees. We need this
+    // to store the anytype, but need to do this in a controlled way so that
+    // we don't allow anyone to "escape" the power manager.
+    fn copy_store(&self) -> Self;
+}
 
 pub trait State {
     type Reg: Reg<StateEnum = Self::StateEnum>;
     type StateEnum: StateEnum;
 }
 
+pub trait AnyReg
+where
+    Self: Reg,
+{
+}
+
 pub trait SubState {}
+
+pub trait Merge<T> {
+    type Output;
+
+    fn merge(self, other: T) -> Self::Output;
+}

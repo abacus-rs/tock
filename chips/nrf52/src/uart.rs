@@ -440,14 +440,18 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
 
     /// Transmit one byte at the time and the client is responsible for polling
     /// This is used by the panic handler
-    pub unsafe fn send_byte(&self, byte: u8) {
+    pub unsafe fn send_byte(
+        &self,
+        byte: u8,
+        registers: Nrf52UarteRegisters<Active<Any, TxIdle>>,
+    ) -> Nrf52UarteRegisters<Active<Any, Tx>> {
         self.tx_remaining_bytes.set(1);
-        self.registers.event_endtx.write(Event::READY::CLEAR);
+        registers.event_endtx.write(Event::READY::CLEAR);
         // precaution: copy value into variable with static lifetime
         BYTE = byte;
-        self.registers.txd_ptr.set(core::ptr::addr_of!(BYTE) as u32);
-        self.registers.txd_maxcnt.write(Counter::COUNTER.val(1));
-        self.registers.task_starttx.write(Task::ENABLE::SET);
+        registers.txd_ptr.set(core::ptr::addr_of!(BYTE) as u32);
+        registers.txd_maxcnt.write(Counter::COUNTER.val(1));
+        registers.into_starttx(self.power_manager)
     }
 
     /// Check if the UART transmission is done
