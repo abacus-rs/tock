@@ -10,7 +10,7 @@ use syn::{
     Variant, Visibility,
 };
 
-use std::collections::{hash_set::HashSet, HashMap};
+use std::{collections::{hash_set::HashSet, HashMap} };
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 struct State {
@@ -47,13 +47,43 @@ impl State {
         register_name: &Ident,
         store_name: &Ident,
         struct_name: &proc_macro2::TokenStream,
-        any_type: bool
+        merge_body: Vec<&State>,
+        any_positions: Option<Vec<(usize, Ident)>>,
+        // flag to denote if this is a shallow creation (only implement merge)
+        only_any: bool 
     ) -> proc_macro2::TokenStream {
         let mut result = proc_macro2::TokenStream::new();
 
         let state_ident = self.ident.clone();
         let struct_shortname = self.shortname.clone();
         // Form struct name / generics in carrots
+        let concrete_type = self.form_concrete_state_type();
+
+        let reg_merge = if any_positions.is_some() {
+            let mut merge_generic_state = self.clone();
+
+            for item in &any_positions.clone().unwrap() {
+                merge_generic_state.substates[item.0] = item.1.clone();
+            }
+
+            let merge_generic_ident = merge_generic_state.form_concrete_state_type();
+            
+            quote!{
+                impl Merge<#register_name<#merge_generic_ident>> for #register_name<#concrete_type> {
+                    type Output = #register_name<#merge_generic_ident>;
+
+                    fn merge(self, _other: #register_name<#merge_generic_ident>) -> Self::Output {
+                        unimplemented!();
+                    }
+                }
+            }
+        } else {
+            quote!{}
+        };
+
+        if only_any {
+            return reg_merge;
+        }
 
         // Form full struct using formed name
         if self.substates.is_empty() {
@@ -85,7 +115,6 @@ impl State {
             });
         } else {
 
-            let concrete_type = self.form_concrete_state_type();
             result.extend(quote!{
                 impl State for #concrete_type {
                     type Reg = #register_name<#concrete_type>;
@@ -98,20 +127,48 @@ impl State {
                 
             });
 
-            if any_type {
-                result.extend(quote! {
-                    impl From<#register_name<#concrete_type>> for #store_name {
-                        fn from(reg: #register_name<#concrete_type>) -> Self {
-                            unimplemented!();
-                        }
-                    }
+            if any_positions.is_some() {
+                result.extend(reg_merge);
 
-                    impl TryFrom<#store_name> for #register_name<#concrete_type> {
-                        type Error = (kernel::ErrorCode, #store_name);
-                        fn try_from(store: #store_name) -> Result<Self, Self::Error> {
-                            unimplemented!();
+                let merge_body = merge_body.iter().map(|state|{
+                    let enum_variant = state.shortname.clone();
+
+                    if is_mergeable(self, state) {
+                        quote! {
+                            #store_name::#enum_variant(reg) => Ok(self.merge(reg).into())
+                        }
+                    } else {
+                        quote! {
+                            #store_name::#enum_variant(reg) => Err(#store_name::#enum_variant(reg))
                         }
                     }
+                });
+
+                    result.extend(quote! {
+                        impl Merge<#store_name> for #register_name<#concrete_type> {
+                            type Output = Result<#store_name, #store_name>;
+                            
+                            fn merge(self, other: #store_name) -> Self::Output {
+                                match other {
+                                    #(#merge_body),*
+                                }
+                            }
+                        }
+
+                        impl AnyReg for #register_name<#concrete_type> {}
+
+                        impl From<#register_name<#concrete_type>> for #store_name {
+                            fn from(reg: #register_name<#concrete_type>) -> Self {
+                                unimplemented!();
+                            }
+                        }
+
+                        impl TryFrom<#store_name> for #register_name<#concrete_type> {
+                            type Error = (kernel::ErrorCode, #store_name);
+                            fn try_from(store: #store_name) -> Result<Self, Self::Error> {
+                                unimplemented!();
+                            }
+                        }
                 });
             } else {
                 result.extend(quote!{
@@ -274,41 +331,112 @@ impl Register {
             panic!("Only one valid state is supported for now.");
         }
 
+        // Determine if this state contains an Any substate.
+        let is_anytype = self.valid_states.first().unwrap().substates.iter().any(|substate| substate.to_string() == "Any");
+        
+        // An Any substate means an state is valid. To mock up this behavior in the 
+        // type system, we must replace the Any substate with a generic type.
+        let map_any = |mut state: State| {
+            // For any substate that is Any, replace with generic T.
+            
+            for substate in state.substates.iter_mut() {
+                if substate.to_string() == "Any" {
+                    *substate = format_ident!("T");
+                }
+            }
+
+            state.form_concrete_state_type()
+
+        };
+        
         match &self.register_type {
             RegisterType::ReadOnly => {
-                quote! {
-                    impl ReadOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
-                        pub fn get(&self) -> #register_bitwidth {
-                            self.reg.get()
+                if is_anytype {
+                    let state_ident = map_any(self.valid_states.first().unwrap().clone()); 
+                    quote! {
+                        impl <T: SubState> ReadOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
+                        where 
+                            #state_ident: State
+                        {
+                            pub fn get(&self) -> #register_bitwidth {
+                                self.reg.get()
+                            }
+                        }
+                    }
+                } else {
+                    quote! {
+                        impl ReadOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
+                            pub fn get(&self) -> #register_bitwidth {
+                                self.reg.get()
+                            }
                         }
                     }
                 }
             }
             RegisterType::WriteOnly => {
-                quote! {
-                    impl WriteOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
-                        pub fn set(&self, value: #register_bitwidth) {
-                            self.reg.set(value)
-                        }
+                if is_anytype {
+                   let state_ident = map_any(self.valid_states.first().unwrap().clone());
+                    quote! {
+                        impl <T: SubState> WriteOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
+                        where 
+                            #state_ident: State
+                        {
+                            pub fn set(&self, value: #register_bitwidth) {
+                                self.reg.set(value)
+                            }
 
-                        pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
-                            self.reg.write(value)
+                            pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                self.reg.write(value)
+                            }
+                        }
+                    }  
+                } else {
+                    quote! {
+                        impl WriteOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
+                            pub fn set(&self, value: #register_bitwidth) {
+                                self.reg.set(value)
+                            }
+
+                            pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                self.reg.write(value)
+                            }
                         }
                     }
                 }
             }
             RegisterType::ReadWrite => {
-                quote! {
-                    impl ReadWriteRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
-                        pub fn get(&self) -> #register_bitwidth {
-                            self.reg.get()
-                        }
-                        pub fn set(&self, value: #register_bitwidth) {
-                            self.reg.set(value)
-                        }
+                if is_anytype {
+                    let state_ident = map_any(self.valid_states.first().unwrap().clone());
+                    quote! {
+                        impl <T: SubState> ReadWriteRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
+                        where 
+                            #state_ident: State
+                        {
+                            pub fn get(&self) -> #register_bitwidth {
+                                self.reg.get()
+                            }
+                            pub fn set(&self, value: #register_bitwidth) {
+                                self.reg.set(value)
+                            }
 
-                        pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
-                            self.reg.write(value)
+                            pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                self.reg.write(value)
+                            }
+                        }
+                    }
+                } else {
+                    quote! {
+                        impl ReadWriteRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
+                            pub fn get(&self) -> #register_bitwidth {
+                                self.reg.get()
+                            }
+                            pub fn set(&self, value: #register_bitwidth) {
+                                self.reg.set(value)
+                            }
+
+                            pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                self.reg.write(value)
+                            }
                         }
                     }
                 }
@@ -317,8 +445,6 @@ impl Register {
                 let reg_field_name = self.name.clone();
                 let trait_name = format_ident!("Step{}", state_shortname);
 
-                // Determine if this state contains an Any substate.
-                let is_anytype = state.substates.iter().any(|substate| substate.to_string() == "Any");
 
                 let to_state_fn_name =
                     format_ident!("into_{}", state_shortname.to_string().to_lowercase());
@@ -327,21 +453,6 @@ impl Register {
                     // Create copy of state to change
                     let mut state = state.clone();
                     let from_state = self.valid_states.first().expect("state valid").clone();
-
-                    // An Any substate means an state is valid. To mock up this behavior in the 
-                    // type system, we must replace the Any substate with a generic type.
-                    let map_any = |mut state: State| {
-                        // For any substate that is Any, replace with generic T.
-                        
-                        for substate in state.substates.iter_mut() {
-                            if substate.to_string() == "Any" {
-                                *substate = format_ident!("T");
-                            }
-                        }
-
-                        state.form_concrete_state_type()
-
-                    };
 
                     let to_state = map_any(state);
                     let from_state = map_any(from_state);
@@ -446,31 +557,45 @@ struct MacroInput {
 }
 
 impl MacroInput {
+    // Gives two returns, the body for the impl Merge<Store> for XXX and 
+    // the enum store.
     fn generate_state_store(
         &self,
         register_name: &Ident,
         store_name: &Ident,
     ) -> proc_macro2::TokenStream {
+        let mut output = proc_macro2::TokenStream::new();
+
+        // Gather substates to be used for creating type.
+        let substate_iter = |state: State| {
+            state.substates.iter().map(|substate| {
+                quote! {
+                    #substate
+                }
+            }).collect::<Vec<_>>()
+        };
+        
+        let substate_tokens = |state: State| {
+            let state_ident = state.ident.clone();
+            if state.substates.is_empty() {
+                quote! {
+                    #state_ident
+            }
+            } else {
+                let substate_iter = substate_iter(state.clone());
+                quote! {
+                    #state_ident<#(#substate_iter),*>
+                }
+            }
+        };
+
         let store_variants: Vec<Variant> = self
             .states
             .iter()
             .map(|state| {
-                let substate_iter = state.substates.iter().map(|substate| {
-                    quote! {
-                        #substate
-                    }
-                });
 
                 let state_ident = state.ident.clone();
-                let substate_tokens = if state.substates.is_empty() {
-                    quote! {
-                        #state_ident
-                    }
-                } else {
-                    quote! {
-                        #state_ident<#(#substate_iter),*>
-                    }
-                };
+                let substate_tokens = substate_tokens(state.clone());
 
                 Variant {
                     attrs: Vec::new(),
@@ -498,14 +623,37 @@ impl MacroInput {
         //     Off(Nrf5xTempRegister<state_ident>),
         //     Reading(Nrf5xTempRegister<state_ident>),
         // }
-        quote! {
+
+
+          //Nrf5xTemperatureStore::Reading(_reg) => {
+          //      Nrf5xTemperatureStore::Reading(Nrf5xTempRegister::<Reading>::new())
+        // }
+        // Generate StateEnum trait implementation
+        let state_enum_impl = self.states.iter().map(|state| {
+            let enum_variant = state.shortname.clone(); 
+            let state_tokens = substate_tokens(state.clone());
+            quote! {
+                #store_name::#enum_variant(_) => #store_name::#enum_variant(#register_name::<#state_tokens>::new())
+            }
+        });
+
+        output.extend(quote! {
             pub enum #store_name{
                 #(#store_variants),*
             }
 
             impl Store for #store_name {}
-            impl StateEnum for #store_name {}
-        }
+            impl StateEnum for #store_name {
+                fn copy_store(&self) -> Self {
+                    match self {
+                        #(#state_enum_impl),*
+                    }
+                }
+            }
+
+        });
+
+        output
     }
 
     fn generate_states(
@@ -521,6 +669,8 @@ impl MacroInput {
 
         let mut state_hash = HashSet::new();
 
+        let all_states_vec = self.states.iter().collect::<Vec<_>>();
+
         let mut state_map = HashMap::new();
         for state in &self.states {
             // State hash map used for name mapping later.
@@ -532,21 +682,29 @@ impl MacroInput {
             // 1. The specified state.
             // 2. As potentially an any state.
             // 3. As potentially all being any states.
+            // TODO: We need to add logic for if there are 3 substates (e.g. <Any, Any, Tx>)
             for iter in 0..(&state.substates.len() + 2) {
-                let mut any_type = false;
+                let mut any_positions: Option<Vec<(usize, Ident)>> = None;
+            
                 state.substates = original_substates.clone();
                 
                 // Case (2) 
                 if iter < state.substates.len() {
+                    any_positions = Some(vec![(iter, state.substates[iter].clone())]);
                     state.substates[iter] = format_ident!("Any");
-
-                    any_type = true;
                 }
 
                 // Case (3)
                 if iter == state.substates.len() {
-                    state.substates = state.substates.iter().map(|_| format_ident!("Any")).collect();
-                    any_type = true;
+                    // Update substates to all be "Any" and record positions with prior ident value
+                    let mut vec: Vec<(usize, Ident)> = Vec::new();
+                    for (pos, substate) in state.substates.iter().enumerate() {
+                        vec.push((pos, substate.clone()));
+                    }
+
+                    any_positions = Some(vec);
+                    state.substates.iter_mut().for_each(|substate| *substate = format_ident!("Any"));
+                    
                 }                
 
                 let state_ident = state.ident.clone();
@@ -584,11 +742,14 @@ impl MacroInput {
                     }
                 });
 
+                // To avoid duplicate implementations for a type, check if it has already been used.
                 let concrete_state_str = state.form_concrete_state_type().to_string();
                 eprintln!("concrete_state_str: {:?}", concrete_state_str); 
                 if state_hash.contains(&concrete_state_str) {
-                    eprintln!("match!");
-                    continue;
+                    if any_positions.is_some() {
+                        output.extend(state.generate_state(register_name, store_name, &struct_name, all_states_vec.clone(), any_positions, true));
+                    } 
+                        continue; // Skip creating this state, as it has already been created.
                 } else {
                     state_hash.insert(concrete_state_str.clone());
                 }
@@ -606,7 +767,7 @@ impl MacroInput {
                 }
                 
                 
-                output.extend(state.generate_state(register_name, store_name, &struct_name, any_type));
+                output.extend(state.generate_state(register_name, store_name, &struct_name, all_states_vec.clone(), any_positions, false));
             }
         }
 
@@ -656,7 +817,7 @@ impl MacroInput {
 fn add_imports() -> proc_macro2::TokenStream {
     quote!(
         use kernel::power_manager::{
-            Peripheral, State, SubState, StateEnum, Reg, Store, PowerManager, PowerError,
+            Peripheral, State, SubState, StateEnum, Reg, Store, PowerManager, PowerError, Merge, AnyReg,
         };
         use core::marker::PhantomData;
         use core::mem::transmute;
@@ -699,9 +860,21 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     let mut result = add_imports();
 
     eprintln!("register: {:?}", register);
+
+    // IN REGARDS TO THE NEW METHOD BELOW:
+    // The existence of this method destroys all guarantees. We need this
+    // to store the anytype, but need to do this in a controlled way so that 
+    // we don't allow anyone to "escape" the power manager.
     let block = quote! {
         pub struct #register<S: kernel::power_manager::State> {
             reg: StaticRef<#register_block<S>>,
+        }
+
+        impl <S: State> #register<S> {
+            pub fn new() -> #register<S> {
+                let reg = unsafe { StaticRef::new(0x4000C000 as *const #register_block<S>) };
+                #register { reg }
+            }
         }
 
         impl <S: State> Deref for #register<S> {
@@ -714,12 +887,14 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     result.extend(block);
 
+    // Generate store enum
+    let state_enum = parsed_input.generate_state_store(&register, &store);
+    result.extend(state_enum);
+    
     // Generate states
     let (states_generated, state_map) = parsed_input.generate_states(&register, &store);
     result.extend(states_generated);
 
-    // Generate store enum
-    result.extend(parsed_input.generate_state_store(&register, &store));
 
     result.extend(quote! {
         pub struct #peripheral {}
@@ -879,14 +1054,24 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     result.into()
 }
 
-/*
+// This is a helper function to determine if two states are mergable. 
+fn is_mergeable(state1: &State, state2: &State) -> bool {
+    // Given 2 reg types, determine if they are mergeable
 
-THINGS TO GENERATE:
+    // If the states are NOT the same, they are not mergeable.
+    if state1.ident != state2.ident {
+        return false;
+    }
 
-StateStore
-States
-SubStates
-TryFrom
-From
+    // For every substate, the substates may only be different if 
+    // one of the substates is ANY.
+    for (substate1, substate2) in state1.substates.iter().zip(state2.substates.iter()) {
+        if substate1 != substate2 {
+            if substate1.to_string() != "Any" && substate2.to_string() != "Any" {
+                return false;
+            }
+        }
+    }
 
-*/
+    return true
+}
