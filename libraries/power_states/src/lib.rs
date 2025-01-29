@@ -5,12 +5,12 @@ use syn::{
     bracketed,
     parse::{Parse, ParseStream},
     parse_macro_input,
-    punctuated::{self, Punctuated},
+    punctuated::Punctuated,
     DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, PathArguments, Type,
     Variant, Visibility,
 };
 
-use std::{collections::{hash_set::HashSet, HashMap} };
+use std::collections::{hash_set::HashSet, HashMap}; 
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 struct State {
@@ -336,25 +336,46 @@ impl Register {
         
         // An Any substate means an state is valid. To mock up this behavior in the 
         // type system, we must replace the Any substate with a generic type.
-        let map_any = |mut state: State| {
+        let map_any = |mut state: State, generic_seed: String| {
             // For any substate that is Any, replace with generic T.
-            
+
+            let form_generic = |generic: Ident| {
+                quote!(
+                    #generic: SubState
+                )
+            };
+
+            // These substates may be different, so we need to make distinct 
+            // generics.
+            let mut count = 0;
             for substate in state.substates.iter_mut() {
                 if substate.to_string() == "Any" {
-                    *substate = format_ident!("T");
+                    *substate = format_ident!("{}{}", generic_seed, count.to_string());
+                    count += 1;
                 }
             }
 
-            state.form_concrete_state_type()
+            // create comma separated list T0, T1, ..., T(n) for the number
+            // count
+            let generic_params = (0..count).map(|index| {
+                let generic = format_ident!("{}{}", generic_seed, index.to_string());
+                form_generic(generic)
+            });
+
+            let generic_tokens = quote! {
+                #(#generic_params),*
+            };
+
+            (state.form_concrete_state_type(), generic_tokens)
 
         };
         
         match &self.register_type {
             RegisterType::ReadOnly => {
                 if is_anytype {
-                    let state_ident = map_any(self.valid_states.first().unwrap().clone()); 
+                    let (state_ident, generic_tokens) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"}); 
                     quote! {
-                        impl <T: SubState> ReadOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
+                        impl <#generic_tokens> ReadOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
                         where 
                             #state_ident: State
                         {
@@ -375,9 +396,9 @@ impl Register {
             }
             RegisterType::WriteOnly => {
                 if is_anytype {
-                   let state_ident = map_any(self.valid_states.first().unwrap().clone());
+                   let (state_ident, generic_tokens) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
                     quote! {
-                        impl <T: SubState> WriteOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
+                        impl <#generic_tokens> WriteOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
                         where 
                             #state_ident: State
                         {
@@ -406,9 +427,9 @@ impl Register {
             }
             RegisterType::ReadWrite => {
                 if is_anytype {
-                    let state_ident = map_any(self.valid_states.first().unwrap().clone());
+                    let (state_ident, generic_tokens) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
                     quote! {
-                        impl <T: SubState> ReadWriteRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
+                        impl <#generic_tokens> ReadWriteRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
                         where 
                             #state_ident: State
                         {
@@ -451,14 +472,23 @@ impl Register {
 
                 if is_anytype {
                     // Create copy of state to change
-                    let mut state = state.clone();
+                    let state = state.clone();
                     let from_state = self.valid_states.first().expect("state valid").clone();
+                    let (to_state, to_state_generics) = map_any(state, "T".to_string());
+                    let (from_state, from_state_generics) = map_any(from_state, "T".to_string());
 
-                    let to_state = map_any(state);
-                    let from_state = map_any(from_state);
+                    // to_state_generics and from_state_generics are of the form T0: Substate. convert this to be
+                    // T0, T1, ..., T(n)
+                    let to_state_generic_type = format_ident!("{}",to_state_generics.to_string().replace(" : SubState", ""));
+                    let from_state_generic_type = format_ident!("{}",from_state_generics.to_string().replace(" : SubState", ""));
 
+                    eprintln!("to_state_generics: {:?}", to_state_generics.to_string());
+                    eprintln!("to_state_generic_type: {:?}", to_state_generic_type.to_string());
+                    
+                    // TODO: This is just a marker that we have an issue here. We will need to update 
+                    // <impl T: SubState> to have more generics than T / F for more complex peripherals.
                     quote! {
-                        trait #trait_name<T: SubState>: Sized
+                        trait #trait_name<T0: SubState>: Sized
                         where 
                             #to_state: State,
                             #from_state: State
@@ -469,7 +499,7 @@ impl Register {
                             ) -> Result<#register_name<#to_state>, PowerError<Self>>;
                         }
 
-                        impl <T: SubState> #trait_name<T> for #register_name<#from_state> 
+                        impl <T0: SubState> #trait_name<T0> for #register_name<#from_state> 
                         where 
                             #to_state: State,
                             #from_state: State
@@ -593,8 +623,6 @@ impl MacroInput {
             .states
             .iter()
             .map(|state| {
-
-                let state_ident = state.ident.clone();
                 let substate_tokens = substate_tokens(state.clone());
 
                 Variant {
