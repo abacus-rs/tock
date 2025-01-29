@@ -13,115 +13,69 @@
 use core::cell::Cell;
 use core::cmp::min;
 use kernel::hil::uart;
+use kernel::power_manager::{Reg, State, StateEnum};
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
-use kernel::utilities::registers::{self, register_bitfields, ReadOnly, ReadWrite, WriteOnly};
+use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 use nrf5x::pinmux;
-
-use power_states::process_register_block;
 
 const UARTE_MAX_BUFFER_SIZE: u32 = 0xff;
 
 static mut BYTE: u8 = 0;
 
-pub const UARTE0_BASE: usize = 0x40002000;
-
-// pub const UARTE0_BASE: StaticRef<UarteRegisters> =
-//     unsafe { StaticRef::new(0x40002000 as *const UarteRegisters) };
+pub const UARTE0_BASE: StaticRef<UarteRegisters> =
+    unsafe { StaticRef::new(0x40002000 as *const UarteRegisters) };
 
 #[repr(C)]
-#[process_register_block(
-    peripheral_name = "Nrf52Uarte",
-    states = [
-        Off => [Active(RxIdle, TxIdle)],
-        Active(RxIdle, TxIdle) => [Active(RxIdle, Tx), Active(Rx, TxIdle), Off] {ActiveIdle},
-        Active(Rx, TxIdle) => [Active(RxIdle, TxIdle), Active(Rx, Tx)] {ActiveRx},
-        Active(RxIdle, Tx) => [Active(RxIdle, TxIdle), Active(Rx, Tx)] {ActiveTx},
-        Active(Rx, Tx) => [Active(Rx, TxIdle), Active(RxIdle, Tx)] {ActiveRxTx},
-    ]
-)]
 pub struct UarteRegisters {
-    /// This is a doc comment
-    #[RegAttributes([Active(RxIdle, Any)], StateChange(Active(Rx, Any), Task::ENABLE::SET, startrx), TaskStartRx)]
     task_startrx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(Rx, Any)], StateChange(Active(RxIdle, Any), Task::ENABLE::SET, stoprx), TaskStopRx)]
     task_stoprx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(Any, TxIdle)], StateChange(Active(Any, Tx), Task::ENABLE::SET, starttx), TaskStartTx)]
     task_starttx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(Any, Tx)], StateChange(Active(Any, TxIdle), Task::ENABLE::SET, stoptx), TaskStopTx)]
     task_stoptx: WriteOnly<u32, Task::Register>,
     _reserved1: [u32; 7],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, FlushRxTask)]
     task_flush_rx: WriteOnly<u32, Task::Register>,
     _reserved2: [u32; 52],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, CtsEvent)]
     event_cts: ReadWrite<u32, Event::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, NctsEvent)]
     event_ncts: ReadWrite<u32, Event::Register>,
     _reserved3: [u32; 2],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, EndRxEvent)]
     event_endrx: ReadWrite<u32, Event::Register>,
     _reserved4: [u32; 3],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, EndTxEvent)]
     event_endtx: ReadWrite<u32, Event::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, ErrorEvent)]
     event_error: ReadWrite<u32, Event::Register>,
     _reserved6: [u32; 7],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, RxToEvent)]
     event_rxto: ReadWrite<u32, Event::Register>,
     _reserved7: [u32; 1],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, RxStartEvent)]
     event_rxstarted: ReadWrite<u32, Event::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, TxStartEvent)]
     event_txstarted: ReadWrite<u32, Event::Register>,
     _reserved8: [u32; 1],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, TxStopEvent)]
     event_txstopped: ReadWrite<u32, Event::Register>,
     _reserved9: [u32; 41],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, ShortsReg)]
     shorts: ReadWrite<u32, Shorts::Register>,
     _reserved10: [u32; 64],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, InterruptSet)]
     intenset: ReadWrite<u32, Interrupt::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, InterruptClear)]
     intenclr: ReadWrite<u32, Interrupt::Register>,
     _reserved11: [u32; 93],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, Error)]
     errorsrc: ReadWrite<u32, ErrorSrc::Register>,
     _reserved12: [u32; 31],
-    // TODO: Add multiple attributes (since this can do multiple)
-    #[RegAttributes([Off], StateChange(Active(RxIdle, TxIdle), Uart::ENABLE::ON, enable), Enable)]
     enable: ReadWrite<u32, Uart::Register>,
     _reserved13: [u32; 1],
-    #[RegAttributes([Off], ReadWrite, PSelRts)]
     pselrts: ReadWrite<u32, Psel::Register>,
-    #[RegAttributes([Off], ReadWrite, PSelTxd)]
     pseltxd: ReadWrite<u32, Psel::Register>,
-    #[RegAttributes([Off], ReadWrite, PSelCts)]
     pselcts: ReadWrite<u32, Psel::Register>,
-    #[RegAttributes([Off], ReadWrite, PSelRxd)]
     pselrxd: ReadWrite<u32, Psel::Register>,
     _reserved14: [u32; 3],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, BaudrateReg)]
     baudrate: ReadWrite<u32, Baudrate::Register>,
     _reserved15: [u32; 3],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, RxdPtr)]
     rxd_ptr: ReadWrite<u32, Pointer::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, RxdMaxCnt)]
     rxd_maxcnt: ReadWrite<u32, Counter::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadOnly, RxdAmount)]
     rxd_amount: ReadOnly<u32, Counter::Register>,
     _reserved16: [u32; 1],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, TxdPtr)]
     txd_ptr: ReadWrite<u32, Pointer::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, TxdMaxCnt)]
     txd_maxcnt: ReadWrite<u32, Counter::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadOnly, TxdAmount)]
     txd_amount: ReadOnly<u32, Counter::Register>,
     _reserved17: [u32; 7],
-    #[RegAttributes([Active(Any,Any)], ReadWrite, ConfigReg)]
     config: ReadWrite<u32, Config::Register>,
 }
 
@@ -209,7 +163,8 @@ register_bitfields! [u32,
 /// UARTE
 // It should never be instanced outside this module but because a static mutable reference to it
 // is exported outside this module it must be `pub`
-pub struct Uarte<'a, PM: PowerManager<Nrf52UartePeripheral>> {
+pub struct Uarte<'a> {
+    registers: StaticRef<UarteRegisters>,
     tx_client: OptionalCell<&'a dyn uart::TransmitClient>,
     tx_buffer: kernel::utilities::cells::TakeCell<'static, [u8]>,
     tx_len: Cell<usize>,
@@ -219,7 +174,6 @@ pub struct Uarte<'a, PM: PowerManager<Nrf52UartePeripheral>> {
     rx_remaining_bytes: Cell<usize>,
     rx_abort_in_progress: Cell<bool>,
     offset: Cell<usize>,
-    power_manager: &'a PM,
 }
 
 #[derive(Copy, Clone)]
@@ -227,11 +181,12 @@ pub struct UARTParams {
     pub baud_rate: u32,
 }
 
-impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
+impl<'a> Uarte<'a> {
     /// Constructor
     // This should only be constructed once
-    pub const fn new(pm: &'a PM) -> Uarte<'a, PM> {
+    pub const fn new(regs: StaticRef<UarteRegisters>) -> Uarte<'a> {
         Uarte {
+            registers: regs,
             tx_client: OptionalCell::empty(),
             tx_buffer: kernel::utilities::cells::TakeCell::empty(),
             tx_len: Cell::new(0),
@@ -241,7 +196,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
             rx_remaining_bytes: Cell::new(0),
             rx_abort_in_progress: Cell::new(false),
             offset: Cell::new(0),
-            power_manager: pm,
         }
     }
 
@@ -253,76 +207,64 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
         cts: Option<pinmux::Pinmux>,
         rts: Option<pinmux::Pinmux>,
     ) {
-        self.power_manager
-            .use_power_expecting::<_, Off>(|registers| {
-                registers.pseltxd.write(Psel::PIN.val(txd.into()));
-                registers.pselrxd.write(Psel::PIN.val(rxd.into()));
+        self.registers.pseltxd.write(Psel::PIN.val(txd.into()));
+        self.registers.pselrxd.write(Psel::PIN.val(rxd.into()));
+        cts.map_or_else(
+            || {
+                // If no CTS pin is provided, then we need to mark it as
+                // disconnected in the register.
+                self.registers.pselcts.write(Psel::CONNECT::SET);
+            },
+            |c| {
+                self.registers.pselcts.write(Psel::PIN.val(c.into()));
+            },
+        );
+        rts.map_or_else(
+            || {
+                // If no RTS pin is provided, then we need to mark it as
+                // disconnected in the register.
+                self.registers.pselrts.write(Psel::CONNECT::SET);
+            },
+            |r| {
+                self.registers.pselrts.write(Psel::PIN.val(r.into()));
+            },
+        );
 
-                cts.map_or_else(
-                    || {
-                        // If no CTS pin is provided, then we need to mark it as
-                        // disconnected in the register.
-                        registers.pselcts.write(Psel::CONNECT::SET);
-                    },
-                    |c| {
-                        registers.pselcts.write(Psel::PIN.val(c.into()));
-                    },
-                );
-                rts.map_or_else(
-                    || {
-                        // If no RTS pin is provided, then we need to mark it as
-                        // disconnected in the register.
-                        registers.pselrts.write(Psel::CONNECT::SET);
-                    },
-                    |r| {
-                        registers.pselrts.write(Psel::PIN.val(r.into()));
-                    },
-                );
+        // Make sure we clear the endtx interrupt since that is what we rely on
+        // to know when the DMA TX finishes. Normally, we clear this interrupt
+        // as we handle it, so this is not necessary. However, a bootloader (or
+        // some other startup code) may have setup TX interrupts, and there may
+        // be one pending. We clear it to be safe.
+        self.registers.event_endtx.write(Event::READY::CLEAR);
 
-                // Make sure we clear the endtx interrupt since that is what we rely on
-                // to know when the DMA TX finishes. Normally, we clear this interrupt
-                // as we handle it, so this is not necessary. However, a bootloader (or
-                // some other startup code) may have setup TX interrupts, and there may
-                // be one pending. We clear it to be safe.
-                registers.event_endtx.write(Event::READY::CLEAR);
-
-                if let Ok(reg) = self.enable_uart(registers) {
-                    Ok(reg.into())
-                } else {
-                    unimplemented!()
-                }
-            });
+        self.enable_uart();
     }
 
-    fn set_baud_rate(&self, baud_rate: u32, registers: Nrf52UarteRegisters<Active<Any, Any>>) {
+    fn set_baud_rate(&self, baud_rate: u32) {
         match baud_rate {
-            1200 => registers.baudrate.set(0x0004F000),
-            2400 => registers.baudrate.set(0x0009D000),
-            4800 => registers.baudrate.set(0x0013B000),
-            9600 => registers.baudrate.set(0x00275000),
-            14400 => registers.baudrate.set(0x003AF000),
-            19200 => registers.baudrate.set(0x004EA000),
-            28800 => registers.baudrate.set(0x0075C000),
-            38400 => registers.baudrate.set(0x009D0000),
-            57600 => registers.baudrate.set(0x00EB0000),
-            76800 => registers.baudrate.set(0x013A9000),
-            115200 => registers.baudrate.set(0x01D60000),
-            230400 => registers.baudrate.set(0x03B00000),
-            250000 => registers.baudrate.set(0x04000000),
-            460800 => registers.baudrate.set(0x07400000),
-            921600 => registers.baudrate.set(0x0F000000),
-            1000000 => registers.baudrate.set(0x10000000),
-            _ => registers.baudrate.set(0x01D60000), //setting default to 115200
+            1200 => self.registers.baudrate.set(0x0004F000),
+            2400 => self.registers.baudrate.set(0x0009D000),
+            4800 => self.registers.baudrate.set(0x0013B000),
+            9600 => self.registers.baudrate.set(0x00275000),
+            14400 => self.registers.baudrate.set(0x003AF000),
+            19200 => self.registers.baudrate.set(0x004EA000),
+            28800 => self.registers.baudrate.set(0x0075C000),
+            38400 => self.registers.baudrate.set(0x009D0000),
+            57600 => self.registers.baudrate.set(0x00EB0000),
+            76800 => self.registers.baudrate.set(0x013A9000),
+            115200 => self.registers.baudrate.set(0x01D60000),
+            230400 => self.registers.baudrate.set(0x03B00000),
+            250000 => self.registers.baudrate.set(0x04000000),
+            460800 => self.registers.baudrate.set(0x07400000),
+            921600 => self.registers.baudrate.set(0x0F000000),
+            1000000 => self.registers.baudrate.set(0x10000000),
+            _ => self.registers.baudrate.set(0x01D60000), //setting default to 115200
         }
     }
 
     // Enable UART peripheral, this need to disabled for low power applications
-    fn enable_uart(
-        &self,
-        registers: Nrf52UarteRegisters<Off>,
-    ) -> Result<Nrf52UarteRegisters<Active<RxIdle, TxIdle>>, PowerError<Nrf52UarteRegisters<Off>>>
-    {
-        registers.into_enable(self.power_manager)
+    fn enable_uart(&self) {
+        self.registers.enable.write(Uart::ENABLE::ON);
     }
 
     #[allow(dead_code)]
@@ -330,313 +272,139 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
         self.registers.enable.write(Uart::ENABLE::OFF);
     }
 
-    fn enable_rx_interrupts<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>)
-    where
-        T0: SubState,
-        T1: SubState,
-        Active<T0, T1>: State,
-    {
-        registers.intenset.write(Interrupt::ENDRX::SET);
+    fn enable_rx_interrupts(&self) {
+        self.registers.intenset.write(Interrupt::ENDRX::SET);
     }
 
-    fn enable_tx_interrupts<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>)
-    where
-        T0: SubState,
-        T1: SubState,
-        Active<T0, T1>: State,
-    {
-        registers.intenset.write(Interrupt::ENDTX::SET);
+    fn enable_tx_interrupts(&self) {
+        self.registers.intenset.write(Interrupt::ENDTX::SET);
     }
 
-    fn disable_rx_interrupts<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>)
-    where
-        T0: SubState,
-        T1: SubState,
-        Active<T0, T1>: State,
-    {
-        registers.intenclr.write(Interrupt::ENDRX::SET);
+    fn disable_rx_interrupts(&self) {
+        self.registers.intenclr.write(Interrupt::ENDRX::SET);
     }
 
-    fn disable_tx_interrupts<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>)
-    where
-        T0: SubState,
-        T1: SubState,
-        Active<T0, T1>: State,
-    {
-        registers.intenclr.write(Interrupt::ENDTX::SET);
+    fn disable_tx_interrupts(&self) {
+        self.registers.intenclr.write(Interrupt::ENDTX::SET);
     }
 
     /// UART interrupt handler that listens for both tx_end and rx_end events
     #[inline(never)]
     pub fn handle_interrupt(&self) {
-        self.power_manager
-            .use_power_expecting::<_, Active<Any, TxIdle>>(|registers| {
-                if self.tx_ready() {
-                    self.disable_tx_interrupts(&registers);
-                    registers.event_endtx.write(Event::READY::CLEAR);
-                    let tx_bytes = registers.txd_amount.get() as usize;
+        if self.tx_ready() {
+            self.disable_tx_interrupts();
+            self.registers.event_endtx.write(Event::READY::CLEAR);
+            let tx_bytes = self.registers.txd_amount.get() as usize;
 
-                    // TODO: Investigate this further.
-                    let rem = match self.tx_remaining_bytes.get().checked_sub(tx_bytes) {
-                        None => unimplemented!(), // return,
-                        Some(r) => r,
-                    };
+            let rem = match self.tx_remaining_bytes.get().checked_sub(tx_bytes) {
+                None => return,
+                Some(r) => r,
+            };
 
-                    // All bytes have been transmitted
-                    if rem == 0 {
-                        // Signal client write done
-                        self.tx_client.map(|client| {
-                            self.tx_buffer.take().map(|tx_buffer| {
-                                client.transmitted_buffer(tx_buffer, self.tx_len.get(), Ok(()));
-                            });
+            // All bytes have been transmitted
+            if rem == 0 {
+                // Signal client write done
+                self.tx_client.map(|client| {
+                    self.tx_buffer.take().map(|tx_buffer| {
+                        client.transmitted_buffer(tx_buffer, self.tx_len.get(), Ok(()));
+                    });
+                });
+            } else {
+                // Not all bytes have been transmitted then update offset and continue transmitting
+                self.offset.set(self.offset.get() + tx_bytes);
+                self.tx_remaining_bytes.set(rem);
+                self.set_tx_dma_pointer_to_buffer();
+                self.registers
+                    .txd_maxcnt
+                    .write(Counter::COUNTER.val(min(rem as u32, UARTE_MAX_BUFFER_SIZE)));
+                self.registers.task_starttx.write(Task::ENABLE::SET);
+                self.enable_tx_interrupts();
+            }
+        }
+
+        if self.rx_ready() {
+            self.disable_rx_interrupts();
+
+            // Clear the ENDRX event
+            self.registers.event_endrx.write(Event::READY::CLEAR);
+
+            // Get the number of bytes in the buffer that was received this time
+            let rx_bytes = self.registers.rxd_amount.get() as usize;
+
+            // Check if this ENDRX is due to an abort. If so, we want to
+            // do the receive callback immediately.
+            if self.rx_abort_in_progress.get() {
+                self.rx_abort_in_progress.set(false);
+                self.rx_client.map(|client| {
+                    self.rx_buffer.take().map(|rx_buffer| {
+                        client.received_buffer(
+                            rx_buffer,
+                            self.offset.get() + rx_bytes,
+                            Err(ErrorCode::CANCEL),
+                            uart::Error::None,
+                        );
+                    });
+                });
+            } else {
+                // In the normal case, we need to either pass call the callback
+                // or do another read to get more bytes.
+
+                // Update how many bytes we still need to receive and
+                // where we are storing in the buffer.
+                self.rx_remaining_bytes
+                    .set(self.rx_remaining_bytes.get().saturating_sub(rx_bytes));
+                self.offset.set(self.offset.get() + rx_bytes);
+
+                let rem = self.rx_remaining_bytes.get();
+                if rem == 0 {
+                    // Signal client that the read is done
+                    self.rx_client.map(|client| {
+                        self.rx_buffer.take().map(|rx_buffer| {
+                            client.received_buffer(
+                                rx_buffer,
+                                self.offset.get(),
+                                Ok(()),
+                                uart::Error::None,
+                            );
                         });
-
-                        // Determin if Any is Rx or RxIdle
-                        if let Some(reg) = self
-                            .power_manager
-                            .recover_anytype::<Active<Rx, TxIdle>, _>(registers)
-                        {
-                            unimplemented!("Return this type here");
-                        }
-
-                        if let Some(reg) = self
-                            .power_manager
-                            .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
-                        {
-                            unimplemented!("Power off peripheral, then return");
-                        }
-
-                        unreachable!()
-                    } else {
-                        // Not all bytes have been transmitted then update offset and continue transmitting
-                        self.offset.set(self.offset.get() + tx_bytes);
-                        self.tx_remaining_bytes.set(rem);
-                        self.set_tx_dma_pointer_to_buffer();
-                        registers
-                            .txd_maxcnt
-                            .write(Counter::COUNTER.val(min(rem as u32, UARTE_MAX_BUFFER_SIZE)));
-
-                        let new_register = registers.into_starttx(self.power_manager);
-
-                        if let Ok(reg) = new_register {
-                            self.enable_tx_interrupts(&reg);
-                            Ok(reg.into())
-                        } else {
-                            unimplemented!()
-                        }
-                    }
+                    });
                 } else {
-                    // Determine if Any is Rx or RxIdle
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<Rx, TxIdle>, _>(registers)
-                    {
-                        unimplemented!("Return this type here");
-                    }
+                    // Setup how much we can read. We already made sure that
+                    // this will fit in the buffer.
+                    let to_read = core::cmp::min(rem, 255);
+                    self.registers
+                        .rxd_maxcnt
+                        .write(Counter::COUNTER.val(to_read as u32));
 
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
-                    {
-                        unimplemented!("Power off peripheral, then return");
-                    }
-
-                    unreachable!()
+                    // Actually do the receive.
+                    self.set_rx_dma_pointer_to_buffer();
+                    self.registers.task_startrx.write(Task::ENABLE::SET);
+                    self.enable_rx_interrupts();
                 }
-            });
-
-        self.power_manager
-            .use_power_expecting::<_, Active<RxIdle, Any>>(|registers| {
-                if self.rx_ready() {
-                    self.disable_rx_interrupts(&registers);
-
-                    // Clear the ENDRX event
-                    registers.event_endrx.write(Event::READY::CLEAR);
-
-                    // Get the number of bytes in the buffer that was received this time
-                    let rx_bytes = registers.rxd_amount.get() as usize;
-
-                    // Check if this ENDRX is due to an abort. If so, we want to
-                    // do the receive callback immediately.
-                    if self.rx_abort_in_progress.get() {
-                        self.rx_abort_in_progress.set(false);
-                        self.rx_client.map(|client| {
-                            self.rx_buffer.take().map(|rx_buffer| {
-                                client.received_buffer(
-                                    rx_buffer,
-                                    self.offset.get() + rx_bytes,
-                                    Err(ErrorCode::CANCEL),
-                                    uart::Error::None,
-                                );
-                            });
-                        });
-
-                        // Shutdown peripheral if we are in TxIdle
-                        if let Some(reg) = self
-                            .power_manager
-                            .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
-                        {
-                            unimplemented!("Power off peripheral, then return");
-                        }
-
-                        if let Some(reg) = self
-                            .power_manager
-                            .recover_anytype::<Active<RxIdle, Tx>, _>(registers)
-                        {
-                            unimplemented!("Return this type here");
-                        }
-
-                        unreachable!()
-                    } else {
-                        // In the normal case, we need to either pass call the callback
-                        // or do another read to get more bytes.
-
-                        // Update how many bytes we still need to receive and
-                        // where we are storing in the buffer.
-                        self.rx_remaining_bytes
-                            .set(self.rx_remaining_bytes.get().saturating_sub(rx_bytes));
-                        self.offset.set(self.offset.get() + rx_bytes);
-
-                        let rem = self.rx_remaining_bytes.get();
-                        if rem == 0 {
-                            // Signal client that the read is done
-                            self.rx_client.map(|client| {
-                                self.rx_buffer.take().map(|rx_buffer| {
-                                    client.received_buffer(
-                                        rx_buffer,
-                                        self.offset.get(),
-                                        Ok(()),
-                                        uart::Error::None,
-                                    );
-                                });
-                            });
-
-                            // Determine if Any is Tx or TxIdle
-                            if let Some(reg) = self
-                                .power_manager
-                                .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
-                            {
-                                unimplemented!("Power off peripheral, then return");
-                            }
-
-                            if let Some(reg) = self
-                                .power_manager
-                                .recover_anytype::<Active<Rx, TxIdle>, _>(registers)
-                            {
-                                unimplemented!("Return this type here");
-                            }
-
-                            unreachable!()
-                        } else {
-                            // Setup how much we can read. We already made sure that
-                            // this will fit in the buffer.
-                            let to_read = core::cmp::min(rem, 255);
-                            registers
-                                .rxd_maxcnt
-                                .write(Counter::COUNTER.val(to_read as u32));
-
-                            // Actually do the receive.
-                            self.set_rx_dma_pointer_to_buffer();
-                            let new_register = registers.into_startrx(self.power_manager);
-
-                            if let Ok(reg) = new_register {
-                                self.enable_rx_interrupts(&reg);
-
-                                // Determine if Any is Tx or TxIdle
-                                if let Some(reg) = self
-                                    .power_manager
-                                    .recover_anytype::<Active<Rx, TxIdle>, _>(reg)
-                                {
-                                    unimplemented!("Return this type here");
-                                }
-
-                                if let Some(reg) = self
-                                    .power_manager
-                                    .recover_anytype::<Active<RxIdle, TxIdle>, _>(reg)
-                                {
-                                    unimplemented!("Power off peripheral, then return");
-                                }
-
-                                unreachable!()
-                            } else {
-                                unimplemented!()
-                            }
-                        }
-                    }
-                } else {
-                    // Determine if Any is Tx or TxIdle
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
-                    {
-                        unimplemented!("Power off peripheral, then return");
-                    }
-
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<RxIdle, Tx>, _>(registers)
-                    {
-                        unimplemented!("Return this type here");
-                    }
-
-                    unreachable!()
-                }
-            });
+            }
+        }
     }
 
     /// Transmit one byte at the time and the client is responsible for polling
     /// This is used by the panic handler
     pub unsafe fn send_byte(&self, byte: u8) {
-        self.power_manager
-            .use_power_expecting::<_, Active<Any, TxIdle>>(|registers| {
-                self.tx_remaining_bytes.set(1);
-                registers.event_endtx.write(Event::READY::CLEAR);
-                // precaution: copy value into variable with static lifetime
-                BYTE = byte;
-                registers.txd_ptr.set(core::ptr::addr_of!(BYTE) as u32);
-                registers.txd_maxcnt.write(Counter::COUNTER.val(1));
-
-                if let Ok(tx_registers) = registers.into_starttx(self.power_manager) {
-                    // Determine if Any is Rx or RxIdle
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<RxIdle, Tx>, _>(tx_registers)
-                    {
-                        unimplemented!("Power off peripheral, then return");
-                    }
-
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<Rx, Tx>, _>(tx_registers)
-                    {
-                        unimplemented!("Return this type here");
-                    }
-
-                    unreachable!()
-                } else {
-                    unimplemented!()
-                }
-            });
+        self.tx_remaining_bytes.set(1);
+        self.registers.event_endtx.write(Event::READY::CLEAR);
+        // precaution: copy value into variable with static lifetime
+        BYTE = byte;
+        self.registers.txd_ptr.set(core::ptr::addr_of!(BYTE) as u32);
+        self.registers.txd_maxcnt.write(Counter::COUNTER.val(1));
+        self.registers.task_starttx.write(Task::ENABLE::SET);
     }
 
     /// Check if the UART transmission is done
-    pub fn tx_ready<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>) -> bool
-    where
-        T0: SubState,
-        T1: SubState,
-        Active<T0, T1>: State,
-    {
-        registers.event_endtx.is_set(Event::READY)
+    pub fn tx_ready(&self) -> bool {
+        self.registers.event_endtx.is_set(Event::READY)
     }
 
     /// Check if either the rx_buffer is full or the UART has timed out
-    pub fn rx_ready<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>) -> bool
-    where
-        T0: SubState,
-        T1: SubState,
-        Active<T0, T1>: State,
-    {
-        registers.event_endrx.is_set(Event::READY)
+    pub fn rx_ready(&self) -> bool {
+        self.registers.event_endrx.is_set(Event::READY)
     }
 
     fn set_tx_dma_pointer_to_buffer(&self) {
@@ -672,7 +440,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
     }
 }
 
-impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Transmit<'a> for Uarte<'a, PM> {
+impl<'a> uart::Transmit<'a> for Uarte<'a> {
     fn set_transmit_client(&self, client: &'a dyn uart::TransmitClient) {
         self.tx_client.set(client);
     }
@@ -701,7 +469,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Transmit<'a> for Uarte<'a
     }
 }
 
-impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Configure for Uarte<'a, PM> {
+impl<'a> uart::Configure for Uarte<'a> {
     fn configure(&self, params: uart::Parameters) -> Result<(), ErrorCode> {
         // These could probably be implemented, but are currently ignored, so
         // throw an error.
@@ -721,7 +489,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Configure for Uarte<'a, P
     }
 }
 
-impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a, PM> {
+impl<'a> uart::Receive<'a> for Uarte<'a> {
     fn set_receive_client(&self, client: &'a dyn uart::ReceiveClient) {
         self.rx_client.set(client);
     }
