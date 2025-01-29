@@ -60,6 +60,53 @@ pub trait PowerManager<P: Peripheral> {
 
     fn store_power(&self, val: P::StateEnum);
     fn retrieve_power(&self) -> Result<P::StateEnum, ErrorCode>;
+
+    fn store_power_copy(&self, val: P::StateEnum);
+    fn retrieve_power_copy(&self) -> Option<P::StateEnum>;
+
+    /*
+            fn recover<S1, R: Reg + Merge<P::StateEnum, Output = P::StateEnum>>(
+            &self,
+            reg: R,
+        ) -> Option<S1::Reg>
+        where
+            S1: State<StateEnum = P::StateEnum>,
+        {
+            let original = self.retrieve_power_copy()?;
+            let j = reg.merge(original);
+
+            let val = S1::Reg::try_from(j);
+
+            match val {
+                Ok(reg) => Some(reg),
+                Err(_) => None,
+            }
+        }
+    }
+         */
+
+    fn recover_anytype<S, R>(&self, reg: R) -> Option<S::Reg>
+    where
+        S: State<StateEnum = P::StateEnum>,
+        R: Reg<StateEnum = P::StateEnum>
+            + Merge<P::StateEnum, Output = Result<P::StateEnum, P::StateEnum>>
+            + AnyReg,
+    {
+        let original = self.retrieve_power_copy()?;
+
+        let merged_type_enum = reg.merge(original);
+
+        match merged_type_enum {
+            Ok(state_enum) => {
+                if let Ok(reg) = S::Reg::try_from(state_enum) {
+                    Some(reg)
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    }
 }
 
 pub trait Peripheral {

@@ -15,7 +15,7 @@ use core::cmp::min;
 use kernel::hil::uart;
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
-use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
+use kernel::utilities::registers::{self, register_bitfields, ReadOnly, ReadWrite, WriteOnly};
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 use nrf5x::pinmux;
@@ -286,7 +286,11 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                 // be one pending. We clear it to be safe.
                 registers.event_endtx.write(Event::READY::CLEAR);
 
-                self.enable_uart(registers)
+                if let Ok(reg) = self.enable_uart(registers) {
+                    Ok(reg.into())
+                } else {
+                    unimplemented!()
+                }
             });
     }
 
@@ -316,8 +320,9 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
     fn enable_uart(
         &self,
         registers: Nrf52UarteRegisters<Off>,
-    ) -> Nrf52UarteRegisters<Active<RxIdle, TxIdle>> {
-        registers.into_enable(self.pm)
+    ) -> Result<Nrf52UarteRegisters<Active<RxIdle, TxIdle>>, PowerError<Nrf52UarteRegisters<Off>>>
+    {
+        registers.into_enable(self.power_manager)
     }
 
     #[allow(dead_code)]
@@ -325,143 +330,313 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
         self.registers.enable.write(Uart::ENABLE::OFF);
     }
 
-    fn enable_rx_interrupts(&self, registers: Nrf52UarteRegisters<Active<Any, Any>>) {
+    fn enable_rx_interrupts<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>)
+    where
+        T0: SubState,
+        T1: SubState,
+        Active<T0, T1>: State,
+    {
         registers.intenset.write(Interrupt::ENDRX::SET);
     }
 
-    fn enable_tx_interrupts(&self, registers: Nrf52UarteRegisters<Active<Any, Any>>) {
+    fn enable_tx_interrupts<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>)
+    where
+        T0: SubState,
+        T1: SubState,
+        Active<T0, T1>: State,
+    {
         registers.intenset.write(Interrupt::ENDTX::SET);
     }
 
-    fn disable_rx_interrupts(&self, registers: Nrf52UarteRegisters<Active<Any, Any>>) {
+    fn disable_rx_interrupts<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>)
+    where
+        T0: SubState,
+        T1: SubState,
+        Active<T0, T1>: State,
+    {
         registers.intenclr.write(Interrupt::ENDRX::SET);
     }
 
-    fn disable_tx_interrupts(&self, registers: Nrf52UarteRegisters<Active<Any, Any>>) {
+    fn disable_tx_interrupts<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>)
+    where
+        T0: SubState,
+        T1: SubState,
+        Active<T0, T1>: State,
+    {
         registers.intenclr.write(Interrupt::ENDTX::SET);
     }
 
     /// UART interrupt handler that listens for both tx_end and rx_end events
     #[inline(never)]
     pub fn handle_interrupt(&self) {
-        if self.tx_ready() {
-            self.disable_tx_interrupts();
-            self.registers.event_endtx.write(Event::READY::CLEAR);
-            let tx_bytes = self.registers.txd_amount.get() as usize;
+        self.power_manager
+            .use_power_expecting::<_, Active<Any, TxIdle>>(|registers| {
+                if self.tx_ready() {
+                    self.disable_tx_interrupts(&registers);
+                    registers.event_endtx.write(Event::READY::CLEAR);
+                    let tx_bytes = registers.txd_amount.get() as usize;
 
-            let rem = match self.tx_remaining_bytes.get().checked_sub(tx_bytes) {
-                None => return,
-                Some(r) => r,
-            };
+                    // TODO: Investigate this further.
+                    let rem = match self.tx_remaining_bytes.get().checked_sub(tx_bytes) {
+                        None => unimplemented!(), // return,
+                        Some(r) => r,
+                    };
 
-            // All bytes have been transmitted
-            if rem == 0 {
-                // Signal client write done
-                self.tx_client.map(|client| {
-                    self.tx_buffer.take().map(|tx_buffer| {
-                        client.transmitted_buffer(tx_buffer, self.tx_len.get(), Ok(()));
-                    });
-                });
-            } else {
-                // Not all bytes have been transmitted then update offset and continue transmitting
-                self.offset.set(self.offset.get() + tx_bytes);
-                self.tx_remaining_bytes.set(rem);
-                self.set_tx_dma_pointer_to_buffer();
-                self.registers
-                    .txd_maxcnt
-                    .write(Counter::COUNTER.val(min(rem as u32, UARTE_MAX_BUFFER_SIZE)));
-                self.registers.task_starttx.write(Task::ENABLE::SET);
-                self.enable_tx_interrupts();
-            }
-        }
-
-        if self.rx_ready() {
-            self.disable_rx_interrupts();
-
-            // Clear the ENDRX event
-            self.registers.event_endrx.write(Event::READY::CLEAR);
-
-            // Get the number of bytes in the buffer that was received this time
-            let rx_bytes = self.registers.rxd_amount.get() as usize;
-
-            // Check if this ENDRX is due to an abort. If so, we want to
-            // do the receive callback immediately.
-            if self.rx_abort_in_progress.get() {
-                self.rx_abort_in_progress.set(false);
-                self.rx_client.map(|client| {
-                    self.rx_buffer.take().map(|rx_buffer| {
-                        client.received_buffer(
-                            rx_buffer,
-                            self.offset.get() + rx_bytes,
-                            Err(ErrorCode::CANCEL),
-                            uart::Error::None,
-                        );
-                    });
-                });
-            } else {
-                // In the normal case, we need to either pass call the callback
-                // or do another read to get more bytes.
-
-                // Update how many bytes we still need to receive and
-                // where we are storing in the buffer.
-                self.rx_remaining_bytes
-                    .set(self.rx_remaining_bytes.get().saturating_sub(rx_bytes));
-                self.offset.set(self.offset.get() + rx_bytes);
-
-                let rem = self.rx_remaining_bytes.get();
-                if rem == 0 {
-                    // Signal client that the read is done
-                    self.rx_client.map(|client| {
-                        self.rx_buffer.take().map(|rx_buffer| {
-                            client.received_buffer(
-                                rx_buffer,
-                                self.offset.get(),
-                                Ok(()),
-                                uart::Error::None,
-                            );
+                    // All bytes have been transmitted
+                    if rem == 0 {
+                        // Signal client write done
+                        self.tx_client.map(|client| {
+                            self.tx_buffer.take().map(|tx_buffer| {
+                                client.transmitted_buffer(tx_buffer, self.tx_len.get(), Ok(()));
+                            });
                         });
-                    });
-                } else {
-                    // Setup how much we can read. We already made sure that
-                    // this will fit in the buffer.
-                    let to_read = core::cmp::min(rem, 255);
-                    self.registers
-                        .rxd_maxcnt
-                        .write(Counter::COUNTER.val(to_read as u32));
 
-                    // Actually do the receive.
-                    self.set_rx_dma_pointer_to_buffer();
-                    self.registers.task_startrx.write(Task::ENABLE::SET);
-                    self.enable_rx_interrupts();
+                        // Determin if Any is Rx or RxIdle
+                        if let Some(reg) = self
+                            .power_manager
+                            .recover_anytype::<Active<Rx, TxIdle>, _>(registers)
+                        {
+                            unimplemented!("Return this type here");
+                        }
+
+                        if let Some(reg) = self
+                            .power_manager
+                            .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
+                        {
+                            unimplemented!("Power off peripheral, then return");
+                        }
+
+                        unreachable!()
+                    } else {
+                        // Not all bytes have been transmitted then update offset and continue transmitting
+                        self.offset.set(self.offset.get() + tx_bytes);
+                        self.tx_remaining_bytes.set(rem);
+                        self.set_tx_dma_pointer_to_buffer();
+                        registers
+                            .txd_maxcnt
+                            .write(Counter::COUNTER.val(min(rem as u32, UARTE_MAX_BUFFER_SIZE)));
+
+                        let new_register = registers.into_starttx(self.power_manager);
+
+                        if let Ok(reg) = new_register {
+                            self.enable_tx_interrupts(&reg);
+                            Ok(reg.into())
+                        } else {
+                            unimplemented!()
+                        }
+                    }
+                } else {
+                    // Determine if Any is Rx or RxIdle
+                    if let Some(reg) = self
+                        .power_manager
+                        .recover_anytype::<Active<Rx, TxIdle>, _>(registers)
+                    {
+                        unimplemented!("Return this type here");
+                    }
+
+                    if let Some(reg) = self
+                        .power_manager
+                        .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
+                    {
+                        unimplemented!("Power off peripheral, then return");
+                    }
+
+                    unreachable!()
                 }
-            }
-        }
+            });
+
+        self.power_manager
+            .use_power_expecting::<_, Active<RxIdle, Any>>(|registers| {
+                if self.rx_ready() {
+                    self.disable_rx_interrupts(&registers);
+
+                    // Clear the ENDRX event
+                    registers.event_endrx.write(Event::READY::CLEAR);
+
+                    // Get the number of bytes in the buffer that was received this time
+                    let rx_bytes = registers.rxd_amount.get() as usize;
+
+                    // Check if this ENDRX is due to an abort. If so, we want to
+                    // do the receive callback immediately.
+                    if self.rx_abort_in_progress.get() {
+                        self.rx_abort_in_progress.set(false);
+                        self.rx_client.map(|client| {
+                            self.rx_buffer.take().map(|rx_buffer| {
+                                client.received_buffer(
+                                    rx_buffer,
+                                    self.offset.get() + rx_bytes,
+                                    Err(ErrorCode::CANCEL),
+                                    uart::Error::None,
+                                );
+                            });
+                        });
+
+                        // Shutdown peripheral if we are in TxIdle
+                        if let Some(reg) = self
+                            .power_manager
+                            .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
+                        {
+                            unimplemented!("Power off peripheral, then return");
+                        }
+
+                        if let Some(reg) = self
+                            .power_manager
+                            .recover_anytype::<Active<RxIdle, Tx>, _>(registers)
+                        {
+                            unimplemented!("Return this type here");
+                        }
+
+                        unreachable!()
+                    } else {
+                        // In the normal case, we need to either pass call the callback
+                        // or do another read to get more bytes.
+
+                        // Update how many bytes we still need to receive and
+                        // where we are storing in the buffer.
+                        self.rx_remaining_bytes
+                            .set(self.rx_remaining_bytes.get().saturating_sub(rx_bytes));
+                        self.offset.set(self.offset.get() + rx_bytes);
+
+                        let rem = self.rx_remaining_bytes.get();
+                        if rem == 0 {
+                            // Signal client that the read is done
+                            self.rx_client.map(|client| {
+                                self.rx_buffer.take().map(|rx_buffer| {
+                                    client.received_buffer(
+                                        rx_buffer,
+                                        self.offset.get(),
+                                        Ok(()),
+                                        uart::Error::None,
+                                    );
+                                });
+                            });
+
+                            // Determine if Any is Tx or TxIdle
+                            if let Some(reg) = self
+                                .power_manager
+                                .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
+                            {
+                                unimplemented!("Power off peripheral, then return");
+                            }
+
+                            if let Some(reg) = self
+                                .power_manager
+                                .recover_anytype::<Active<Rx, TxIdle>, _>(registers)
+                            {
+                                unimplemented!("Return this type here");
+                            }
+
+                            unreachable!()
+                        } else {
+                            // Setup how much we can read. We already made sure that
+                            // this will fit in the buffer.
+                            let to_read = core::cmp::min(rem, 255);
+                            registers
+                                .rxd_maxcnt
+                                .write(Counter::COUNTER.val(to_read as u32));
+
+                            // Actually do the receive.
+                            self.set_rx_dma_pointer_to_buffer();
+                            let new_register = registers.into_startrx(self.power_manager);
+
+                            if let Ok(reg) = new_register {
+                                self.enable_rx_interrupts(&reg);
+
+                                // Determine if Any is Tx or TxIdle
+                                if let Some(reg) = self
+                                    .power_manager
+                                    .recover_anytype::<Active<Rx, TxIdle>, _>(reg)
+                                {
+                                    unimplemented!("Return this type here");
+                                }
+
+                                if let Some(reg) = self
+                                    .power_manager
+                                    .recover_anytype::<Active<RxIdle, TxIdle>, _>(reg)
+                                {
+                                    unimplemented!("Power off peripheral, then return");
+                                }
+
+                                unreachable!()
+                            } else {
+                                unimplemented!()
+                            }
+                        }
+                    }
+                } else {
+                    // Determine if Any is Tx or TxIdle
+                    if let Some(reg) = self
+                        .power_manager
+                        .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
+                    {
+                        unimplemented!("Power off peripheral, then return");
+                    }
+
+                    if let Some(reg) = self
+                        .power_manager
+                        .recover_anytype::<Active<RxIdle, Tx>, _>(registers)
+                    {
+                        unimplemented!("Return this type here");
+                    }
+
+                    unreachable!()
+                }
+            });
     }
 
     /// Transmit one byte at the time and the client is responsible for polling
     /// This is used by the panic handler
-    pub unsafe fn send_byte(
-        &self,
-        byte: u8,
-        registers: Nrf52UarteRegisters<Active<Any, TxIdle>>,
-    ) -> Nrf52UarteRegisters<Active<Any, Tx>> {
-        self.tx_remaining_bytes.set(1);
-        registers.event_endtx.write(Event::READY::CLEAR);
-        // precaution: copy value into variable with static lifetime
-        BYTE = byte;
-        registers.txd_ptr.set(core::ptr::addr_of!(BYTE) as u32);
-        registers.txd_maxcnt.write(Counter::COUNTER.val(1));
-        registers.into_starttx(self.power_manager)
+    pub unsafe fn send_byte(&self, byte: u8) {
+        self.power_manager
+            .use_power_expecting::<_, Active<Any, TxIdle>>(|registers| {
+                self.tx_remaining_bytes.set(1);
+                registers.event_endtx.write(Event::READY::CLEAR);
+                // precaution: copy value into variable with static lifetime
+                BYTE = byte;
+                registers.txd_ptr.set(core::ptr::addr_of!(BYTE) as u32);
+                registers.txd_maxcnt.write(Counter::COUNTER.val(1));
+
+                if let Ok(tx_registers) = registers.into_starttx(self.power_manager) {
+                    // Determine if Any is Rx or RxIdle
+                    if let Some(reg) = self
+                        .power_manager
+                        .recover_anytype::<Active<RxIdle, Tx>, _>(tx_registers)
+                    {
+                        unimplemented!("Power off peripheral, then return");
+                    }
+
+                    if let Some(reg) = self
+                        .power_manager
+                        .recover_anytype::<Active<Rx, Tx>, _>(tx_registers)
+                    {
+                        unimplemented!("Return this type here");
+                    }
+
+                    unreachable!()
+                } else {
+                    unimplemented!()
+                }
+            });
     }
 
     /// Check if the UART transmission is done
-    pub fn tx_ready(&self) -> bool {
-        self.registers.event_endtx.is_set(Event::READY)
+    pub fn tx_ready<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>) -> bool
+    where
+        T0: SubState,
+        T1: SubState,
+        Active<T0, T1>: State,
+    {
+        registers.event_endtx.is_set(Event::READY)
     }
 
     /// Check if either the rx_buffer is full or the UART has timed out
-    pub fn rx_ready(&self) -> bool {
-        self.registers.event_endrx.is_set(Event::READY)
+    pub fn rx_ready<T0, T1>(&self, registers: &Nrf52UarteRegisters<Active<T0, T1>>) -> bool
+    where
+        T0: SubState,
+        T1: SubState,
+        Active<T0, T1>: State,
+    {
+        registers.event_endrx.is_set(Event::READY)
     }
 
     fn set_tx_dma_pointer_to_buffer(&self) {
