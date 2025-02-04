@@ -496,7 +496,7 @@ impl Register {
                             fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
                                 self,
                                 pm: &PM,
-                            ) -> Result<#register_name<#to_state>, PowerError<Self>>;
+                            ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>>;
                         }
 
                         impl <T0: SubState> #trait_name<T0> for #register_name<#from_state> 
@@ -507,14 +507,14 @@ impl Register {
                             fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
                                 self,
                                 _pm: &PM,
-                            ) -> Result<#register_name<#to_state>, PowerError<Self>> {
+                            ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>> {
                                 self.#reg_field_name.reg.write(#instruction);
 
                                 unsafe {
                                     Ok(transmute::<
                                         #register_name<#from_state>,
                                         #register_name<#to_state>
-                                    >(self))
+                                    >(self)).into()
                                 }
                             }
                         }
@@ -528,21 +528,21 @@ impl Register {
                             fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
                                 self,
                                 pm: &PM,
-                            ) -> Result<#register_name<#to_state>, PowerError<Self>>;
+                            ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>>;
                         }
 
                         impl #trait_name for #register_name<#from_state> {
                             fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
                                 self,
                                 _pm: &PM,
-                            ) -> Result<#register_name<#to_state>, PowerError<Self>> {
+                            ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>> {
                                 self.#reg_field_name.reg.write(#instruction);
 
                                 unsafe {
                                     Ok(transmute::<
                                         #register_name<#from_state>,
                                         #register_name<#to_state>
-                                    >(self))
+                                    >(self)).into()
                                 }
                             }
                         }
@@ -1052,6 +1052,33 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     // FIX ME
     result.extend(quote! {
+        pub enum RegisterResult<A: Reg, B: Reg> {
+            Ok(A),
+            Err(PowerError<B>),
+        }
+
+        impl <A: Reg, B: Reg> From<Result<A, PowerError<B>>> for RegisterResult<A, B> {
+            fn from(result: Result<A, PowerError<B>>) -> Self {
+                match result {
+                    Ok(val) => RegisterResult::Ok(val),
+                    Err(err) => RegisterResult::Err(err),
+                }
+            }
+        }
+
+        impl <A: Reg, B: Reg> RegisterResult<A, B> {
+            fn into_closure_return<C, D>(self) -> Result<C, PowerError<D>> 
+            where
+                C: StateEnum + From<A>,
+                D: StateEnum + From<B>,
+            {
+                match self {
+                    RegisterResult::Ok(val) => Ok(val.into()),
+                    RegisterResult::Err(PowerError(reg, error_code)) => Err(PowerError(reg.into(), error_code))
+                }
+            }
+        }
+
         struct StateChangeRegister<T: UIntLike, R: RegisterLongName, Name, S: State> {
             reg: WriteOnly<T, R>,
             associated_state: PhantomData<S>,

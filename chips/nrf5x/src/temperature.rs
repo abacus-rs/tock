@@ -171,11 +171,7 @@ impl<'a, PM: PowerManager<Nrf5xTempPeripheral>> Temp<'a, PM> {
             // trigger callback with temperature
             self.client.map(|client| client.callback(Ok(temp)));
 
-            // TODO: helper to handle this and place into enum.
-            match reg_result {
-                Ok(reg) => Ok(reg.into()),
-                Err(PowerError(val, error)) => Err(PowerError(val.into(), error)),
-            }
+            reg_result.into_closure_return()
         });
     }
 
@@ -196,15 +192,7 @@ impl<'a, PM: PowerManager<Nrf5xTempPeripheral>> kernel::hil::sensors::Temperatur
             .use_power_expecting::<_, Off>(|reg: Nrf5xTempRegisters<Off>| {
                 self.enable_interrupts(&reg);
                 reg.event_datardy.write(Event::READY::CLEAR);
-                let reg_result: Result<
-                    Nrf5xTempRegisters<Reading>,
-                    PowerError<Nrf5xTempRegisters<Off>>,
-                > = reg.into_reading(self.power_manager);
-
-                match reg_result {
-                    Ok(reg) => Ok(reg.into()),
-                    Err(PowerError(val, error)) => Err(PowerError(val.into(), error)),
-                }
+                reg.into_reading(self.power_manager).into_closure_return()
             })
     }
 
