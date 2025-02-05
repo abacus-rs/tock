@@ -491,7 +491,9 @@ impl Register {
                         trait #trait_name<T0: SubState>: Sized
                         where 
                             #to_state: State,
-                            #from_state: State
+                            #from_state: State,
+                            #register_name<#to_state>: Reg,
+                            #register_name<#from_state>: Reg
                         {
                             fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
                                 self,
@@ -502,7 +504,9 @@ impl Register {
                         impl <T0: SubState> #trait_name<T0> for #register_name<#from_state> 
                         where 
                             #to_state: State,
-                            #from_state: State
+                            #from_state: State,
+                            #register_name<#to_state>: Reg,
+                            #register_name<#from_state>: Reg
                         {
                             fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
                                 self,
