@@ -436,6 +436,10 @@ impl Register {
                             pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
                                 self.reg.write(value)
                             }
+
+                            pub fn is_set(&self, field: Field<#register_bitwidth, #register_shortname>) -> bool {
+                                self.reg.is_set(field)
+                            }
                         }
                     }
                 } else {
@@ -863,7 +867,7 @@ fn add_imports() -> proc_macro2::TokenStream {
         use core::marker::PhantomData;
         use core::mem::transmute;
         use core::ops::Deref;
-        use kernel::utilities::registers::{FieldValue, UIntLike, RegisterLongName};
+        use kernel::utilities::registers::{FieldValue, UIntLike, RegisterLongName, Field};
     )
 }
 
