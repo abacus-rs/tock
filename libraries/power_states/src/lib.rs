@@ -1,13 +1,8 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, ToTokens};
 use syn::{
-    bracketed,
-    parse::{Parse, ParseStream},
-    parse_macro_input,
-    punctuated::Punctuated,
-    DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, PathArguments, Type,
-    Variant, Visibility,
+    bracketed, parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated, DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, ItemFn, PathArguments, Type, Variant, Visibility
 };
 
 use std::collections::{hash_set::HashSet, HashMap}; 
@@ -95,6 +90,11 @@ impl State {
 
                 impl Reg for #register_name<#struct_name> {
                     type StateEnum = #store_name;
+                
+                    fn sync_state(&self) -> #store_name {
+                        // read each reg to determine if we are in this state still
+                        unimplemented!();
+                    }
                 }
 
                 impl From<#register_name<#struct_name>> for #store_name {
@@ -664,6 +664,14 @@ impl MacroInput {
             }
         });
 
+        let sync_state_body = self.states.iter().map(|state| {
+            let enum_variant = state.shortname.clone();
+            let state_tokens = substate_tokens(state.clone());
+            quote! {
+                #store_name::#enum_variant(reg) => reg.sync_state()
+            }
+        });
+
         output.extend(quote! {
             pub enum #store_name{
                 #(#store_variants),*
@@ -674,6 +682,12 @@ impl MacroInput {
                 fn copy_store(&self) -> Self {
                     match self {
                         #(#state_enum_impl),*
+                    }
+                }
+
+                fn sync_state(self) -> Self {
+                    match self {
+                        #(#sync_state_body),*
                     }
                 }
             }
@@ -1166,4 +1180,28 @@ fn is_mergeable(state1: &State, state2: &State) -> bool {
     }
 
     return true
+}
+
+#[proc_macro_attribute]
+pub fn entry_point(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    // This is only valid to be placed upon functions.
+    let ast: ItemFn = syn::parse(item).expect("entry point unwrap");
+
+    let function_name = &ast.sig.ident;
+    let function_block = &ast.block.stmts;
+
+    // We expect this to be a member function of the struct that contains
+    // the power manager. (TODO: rethink this assumption)
+    let check_interrupts_shim = quote! {
+        self.power_manager.sync_state();
+    };
+
+    // Prepend check_interrupts_shim to body of fn.
+    quote! {
+        pub fn #function_name(&self) {
+            #check_interrupts_shim
+            #(#function_block)*
+        }
+    }.into()
+
 }

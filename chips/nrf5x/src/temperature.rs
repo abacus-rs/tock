@@ -18,7 +18,7 @@ use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, Writ
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 
-use power_states::process_register_block;
+use power_states::{entry_point, process_register_block};
 
 pub const TEMPERATURE_BASE: usize = 0x4000C000;
 
@@ -154,6 +154,7 @@ impl<'a, PM: PowerManager<Nrf5xTempPeripheral>> Temp<'a, PM> {
     }
 
     /// Temperature interrupt handler
+    #[entry_point]
     pub fn handle_interrupt(&self) {
         // TODO: Anthony is working on a way for this to be outside the interrupt handler. Placing this here
         // for now.

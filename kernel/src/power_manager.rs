@@ -25,6 +25,7 @@ pub trait PowerManager<P: Peripheral> {
         // TODO: We can make this conditional for only if S contains an Any type. Maybe
         // overkill?
         let any_state_copy = stored_state.copy_store();
+        self.store_power_copy(any_state_copy);
 
         // The function caller denotes the expected state. We obtain the stored state from
         // the power manager. If the stored state is not the expected state, we return an
@@ -63,27 +64,17 @@ pub trait PowerManager<P: Peripheral> {
 
     fn store_power_copy(&self, val: P::StateEnum);
     fn retrieve_power_copy(&self) -> Option<P::StateEnum>;
+    fn sync_state(&self) {
+        // Take from store. Case of error on retrieval should not be possible
+        // here. We will want to change this from an unwrap eventually.
+        let state_store = self.retrieve_power().unwrap();
 
-    /*
-            fn recover<S1, R: Reg + Merge<P::StateEnum, Output = P::StateEnum>>(
-            &self,
-            reg: R,
-        ) -> Option<S1::Reg>
-        where
-            S1: State<StateEnum = P::StateEnum>,
-        {
-            let original = self.retrieve_power_copy()?;
-            let j = reg.merge(original);
+        // Sync the hw / sw state machine and obtain new state store.
+        let new_state_store = state_store.sync_state();
 
-            let val = S1::Reg::try_from(j);
-
-            match val {
-                Ok(reg) => Some(reg),
-                Err(_) => None,
-            }
-        }
+        // Replace into store.
+        self.store_power(new_state_store);
     }
-         */
 
     fn recover_anytype<S, R>(&self, reg: R) -> Option<S::Reg>
     where
@@ -119,6 +110,8 @@ where
     Self: TryFrom<Self::StateEnum, Error = (ErrorCode, Self::StateEnum)>,
 {
     type StateEnum: StateEnum;
+
+    fn sync_state(&self) -> Self::StateEnum;
 }
 
 pub trait Store {}
@@ -128,6 +121,7 @@ pub trait StateEnum {
     // to store the anytype, but need to do this in a controlled way so that
     // we don't allow anyone to "escape" the power manager.
     fn copy_store(&self) -> Self;
+    fn sync_state(self) -> Self;
 }
 
 pub trait State {
