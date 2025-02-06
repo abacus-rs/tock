@@ -276,9 +276,9 @@ impl Parse for RegisterType {
             "StateChange" => {
                 let content;
                 let _: syn::token::Paren = syn::parenthesized!(content in input);
-                let new_state = content.parse::<State>()?;
+                let new_state = content.parse::<State>().expect("registertype 1");
 
-                let _: syn::Token![,] = content.parse()?;
+                let _: syn::Token![,] = content.parse().expect("register 2");
 
                 let instruction = content.parse::<syn::Path>().expect("registertype 2");
 
@@ -303,7 +303,6 @@ impl Parse for RegisterType {
 
 struct Register {
     name: Ident,
-    type_name: Ident,
     valid_states: Punctuated<State, syn::Token![,]>,
     register_shortname: syn::GenericArgument,
     register_type: RegisterType,
@@ -311,11 +310,6 @@ struct Register {
 }
 
 impl Register {
-    fn generate_register_name_type(&self) -> proc_macro2::TokenStream {
-        let type_name_ident = self.type_name.clone();
-        quote! { struct #type_name_ident {}}
-    }
-
     fn generate_register_op_bindings(
         &self,
         peripheral_name: &Ident,
@@ -324,7 +318,6 @@ impl Register {
         // impl ReadWriteRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
         let register_bitwidth = self.register_bitwidth.clone();
         let register_shortname = self.register_shortname.clone();
-        let type_name = self.type_name.clone();
         let validstate = self.valid_states.first().expect("generate reg op bindings").form_concrete_state_type();
 
         if self.valid_states.len() != 1 {
@@ -375,7 +368,7 @@ impl Register {
                 if is_anytype {
                     let (state_ident, generic_tokens) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"}); 
                     quote! {
-                        impl <#generic_tokens> ReadOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
+                        impl <#generic_tokens> ReadOnlyRegister<#register_bitwidth, #register_shortname, #state_ident>
                         where 
                             #state_ident: State
                         {
@@ -386,7 +379,7 @@ impl Register {
                     }
                 } else {
                     quote! {
-                        impl ReadOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
+                        impl ReadOnlyRegister<#register_bitwidth, #register_shortname, #validstate> {
                             pub fn get(&self) -> #register_bitwidth {
                                 self.reg.get()
                             }
@@ -398,7 +391,7 @@ impl Register {
                 if is_anytype {
                    let (state_ident, generic_tokens) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
                     quote! {
-                        impl <#generic_tokens> WriteOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
+                        impl <#generic_tokens> WriteOnlyRegister<#register_bitwidth, #register_shortname, #state_ident>
                         where 
                             #state_ident: State
                         {
@@ -413,7 +406,7 @@ impl Register {
                     }  
                 } else {
                     quote! {
-                        impl WriteOnlyRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
+                        impl WriteOnlyRegister<#register_bitwidth, #register_shortname, #validstate> {
                             pub fn set(&self, value: #register_bitwidth) {
                                 self.reg.set(value)
                             }
@@ -429,7 +422,7 @@ impl Register {
                 if is_anytype {
                     let (state_ident, generic_tokens) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
                     quote! {
-                        impl <#generic_tokens> ReadWriteRegister<#register_bitwidth, #register_shortname, #type_name, #state_ident>
+                        impl <#generic_tokens> ReadWriteRegister<#register_bitwidth, #register_shortname, #state_ident>
                         where 
                             #state_ident: State
                         {
@@ -447,7 +440,7 @@ impl Register {
                     }
                 } else {
                     quote! {
-                        impl ReadWriteRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
+                        impl ReadWriteRegister<#register_bitwidth, #register_shortname, #validstate> {
                             pub fn get(&self) -> #register_bitwidth {
                                 self.reg.get()
                             }
@@ -565,18 +558,20 @@ struct RegisterAttributes {
 
 impl Parse for RegisterAttributes {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        eprintln!("inside");
         let content;
         let _ = bracketed!(content in input);
         let states: Punctuated<State, syn::Token![,]> = content
             .parse_terminated(State::parse, syn::Token![,])
             .expect("1");
 
-        input.parse::<syn::Token![,]>()?;
+        input.parse::<syn::Token![,]>().expect("1");
         let register_type: RegisterType = input.parse().expect("Invalid provided reg type.");
 
-        input.parse::<syn::Token![,]>()?;
+        input.parse::<syn::Token![,]>().expect("2");
         let type_name: Ident = input.parse().expect("3");
 
+        eprintln!("success");
         Ok(RegisterAttributes {
             states,
             register_type,
@@ -952,10 +947,13 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     let struct_name_ident = format_ident!("{}RegisterBlock", parsed_input.peripheral_name);
 
+    // Iterator that is applied to each field in the register struct. Used to convert a
+    // tock register struct into an "abacus" struct.
     let field_details = data.fields.iter().map(|field| {
         let field_type = field.ty.clone();
         let field_name = field.ident.clone().expect("field details");
 
+        // If there is a regattribute, we will need to generate bindings.
         let requires_gen = field.attrs.iter().any(|attr| {
             // for each attribute in field attrs, leave all macros but
             // RegAttributes.
@@ -976,21 +974,35 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         });
 
 
-    // DO ATTRIBUTE EXPANSION HERE
-
+        // DO ATTRIBUTE EXPANSION HERE
         if requires_gen {
-            let reg_attr = field.attrs.iter().find_map(|attr| {
+
+            // Parse each register attribute.
+            let reg_attr_vec = field.attrs.iter().map(|attr| {
                 // for each attribute in field attrs, leave doc macro comments
                 // and remove RegAttributes.
+                eprintln!("here");
+                eprintln!("attr: {:?}", attr.path());
                 if attr.path().is_ident("RegAttributes") {
-                    return Some(attr.parse_args::<RegisterAttributes>().expect("requires gen"));
+                    if let Ok(val) = attr.parse_args::<RegisterAttributes>() {
+                        eprintln!("returning now");
+                        return Some(val);
+                    } else {
+                        panic!("sad");
+                        return None;
+                    }
                 }
                 None
-            }).expect("reg attribute error");
+            }).collect::<Vec<_>>();
+
+            eprintln!("end attr");
+
+            // To properly form the register bindings, we must also take information
+            // from the provided type.
             if let Type::Path(type_path) = field_type.clone() {
                 if let Some(segment) = type_path.path.segments.last() {
 
-                    // Check for generics
+                    // Check for generics in original struct's type.
                     if let PathArguments::AngleBracketed(args) = &segment.arguments {
                         let generic_args = &args.args;
                         if generic_args.len() != 2 {
@@ -1007,33 +1019,56 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
                             panic!("unreachable");
                         };
 
-                    reg_vec.push(Register {
-                        name: field_name.clone(),
-                        type_name: reg_attr.type_name.clone(),
-                        valid_states: reg_attr.states,
-                        register_shortname: register_shortname.clone(),
-                        register_type: reg_attr.register_type.clone(),
-                        register_bitwidth: register_bitwidth.clone(),
-                    });
+                    let mut output = proc_macro2::TokenStream::new();
 
-                    let internal_naming = reg_attr.type_name.clone();
-                    let reg_type = format_ident!("{}Register", &reg_attr.register_type.to_ident());
+                    let mut first_item = true;
+                    // For each register field, we iterate through all the register 
+                    // attributes and create a Register object for each attribute.
+                    for reg_attr in reg_attr_vec {
+                        if let Some(reg_attr) = reg_attr {
+                            reg_vec.push(Register {
+                                name: field_name.clone(),
+                                valid_states: reg_attr.states,
+                                register_shortname: register_shortname.clone(),
+                                register_type: reg_attr.register_type.clone(),
+                                register_bitwidth: register_bitwidth.clone(),
+                            });
+                            
+                            let reg_type = format_ident!("{}Register", &reg_attr.register_type.to_ident());
 
-                    quote! {
-                        #(#field_attr)*
-                        pub #field_name: #reg_type<#register_bitwidth, #register_shortname, #internal_naming, S>
-                    
-                    }
+                            let field_attr_clone = field_attr.clone();
+                            output.extend(
+                                quote! {
+                                    #(#field_attr_clone)*
+                            });
+                            
+                            if first_item {
+                                output.extend(
+                                    quote!{
+                                        pub #field_name: #reg_type<#register_bitwidth, #register_shortname, S>
+                                    }
+                                );
+
+                                first_item = false;
+                            }
+                        }
+                    }                    
+                    eprintln!("here0 {:?}", field_name);
+                    output
                 } else {
+                    eprintln!("here1");
                     panic!("unreachable a")
                 }
             } else {
+                    eprintln!("here2");
                 panic!("unreachable b");
             }
         } else {
+            eprintln!("here3");
             panic!("unreachable c");
         }
     } else {
+        eprintln!("here4 {:?}", field_name);
         quote! {
             #(#field_attr)*
             pub #field_name: #field_type
@@ -1048,10 +1083,13 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         }
     };
 
+    let mut generated_bindings_set = HashSet::new();
     for reg in reg_vec {
-        result.extend(reg.generate_register_name_type());
         //  result.extend(reg.generate_state_transition(&peripheral, &register));
-        result.extend(reg.generate_register_op_bindings(&peripheral, &register));
+        let new_binding = reg.generate_register_op_bindings(&peripheral, &register);
+        if generated_bindings_set.insert(new_binding.clone().to_string()) {
+            result.extend(new_binding.clone());
+        } 
     }
 
     // FIX ME
@@ -1083,33 +1121,28 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
             }
         }
 
-        struct StateChangeRegister<T: UIntLike, R: RegisterLongName, Name, S: State> {
+        struct StateChangeRegister<T: UIntLike, R: RegisterLongName, S: State> {
             reg: WriteOnly<T, R>,
             associated_state: PhantomData<S>,
-            associated_name: PhantomData<Name>,
         }
 
-        struct ReadWriteRegister<T: UIntLike, R: RegisterLongName, Name, S: State> {
+        struct ReadWriteRegister<T: UIntLike, R: RegisterLongName, S: State> {
             reg: ReadWrite<T, R>,
             associated_state: PhantomData<S>,
-            associated_name: PhantomData<Name>,
         }
 
-        struct ReadOnlyRegister<T: UIntLike, R: RegisterLongName, Name, S: State> {
+        struct ReadOnlyRegister<T: UIntLike, R: RegisterLongName, S: State> {
             reg: ReadOnly<T, R>,
             associated_state: PhantomData<S>,
-            associated_name: PhantomData<Name>,
         }
 
-        struct WriteOnlyRegister<T: UIntLike, R: RegisterLongName, Name, S: State> {
+        struct WriteOnlyRegister<T: UIntLike, R: RegisterLongName, S: State> {
             reg: WriteOnly<T, R>,
             associated_state: PhantomData<S>,
-            associated_name: PhantomData<Name>,
         }
     });
 
     result.extend(struct_output);
-
     result.into()
 }
 
