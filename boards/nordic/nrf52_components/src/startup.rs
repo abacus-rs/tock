@@ -10,6 +10,7 @@
 use capsules_core::virtualizers::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use core::mem::MaybeUninit;
 use kernel::component::Component;
+use kernel::power_manager::PowerManager;
 use nrf52::gpio::Pin;
 use nrf52::uicr::Regulator0Output;
 use segger::rtt::SeggerRtt;
@@ -185,17 +186,27 @@ pub enum UartChannel<'a> {
     Rtt(components::segger_rtt::SeggerRttMemoryRefs<'a>),
 }
 
-pub struct UartChannelComponent {
+pub struct UartChannelComponent<PM>
+where
+    PM: 'static
+        + PowerManager<nrf52::temperature::Nrf5xTempPeripheral>
+        + PowerManager<nrf52::uart::Nrf52UartePeripheral>,
+{
     uart_channel: UartChannel<'static>,
     mux_alarm: &'static MuxAlarm<'static, nrf52::rtc::Rtc<'static>>,
-    uarte0: &'static nrf52::uart::Uarte<'static>,
+    uarte0: &'static nrf52::uart::Uarte<'static, PM>,
 }
 
-impl UartChannelComponent {
+impl<PM> UartChannelComponent<PM>
+where
+    PM: 'static
+        + PowerManager<nrf52::temperature::Nrf5xTempPeripheral>
+        + PowerManager<nrf52::uart::Nrf52UartePeripheral>,
+{
     pub fn new(
         uart_channel: UartChannel<'static>,
         mux_alarm: &'static MuxAlarm<'static, nrf52::rtc::Rtc<'static>>,
-        uarte0: &'static nrf52::uart::Uarte<'static>,
+        uarte0: &'static nrf52::uart::Uarte<'static, PM>,
     ) -> Self {
         Self {
             uart_channel,
@@ -205,7 +216,12 @@ impl UartChannelComponent {
     }
 }
 
-impl Component for UartChannelComponent {
+impl<PM> Component for UartChannelComponent<PM>
+where
+    PM: 'static
+        + PowerManager<nrf52::temperature::Nrf5xTempPeripheral>
+        + PowerManager<nrf52::uart::Nrf52UartePeripheral>,
+{
     type StaticInput = (
         &'static mut MaybeUninit<VirtualMuxAlarm<'static, nrf52::rtc::Rtc<'static>>>,
         &'static mut MaybeUninit<
