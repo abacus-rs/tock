@@ -107,11 +107,14 @@ pub trait Peripheral {
 
 pub trait Reg
 where
-    Self: TryFrom<Self::StateEnum, Error = (ErrorCode, Self::StateEnum)>,
+    Self: TryFrom<Self::StateEnum, Error = (ErrorCode, <Self as Reg>::StateEnum)>,
 {
     type StateEnum: StateEnum;
+}
 
-    fn sync_state(&self) -> Self::StateEnum;
+pub trait SyncState {
+    type SyncStateEnum: StateEnum;
+    fn sync_state(self) -> Self::SyncStateEnum;
 }
 
 pub trait Store {}

@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::{format_ident, quote, ToTokens};
+use quote::{format_ident, quote};
 use syn::{
     bracketed, parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated, DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, ItemFn, PathArguments, Type, Variant, Visibility
 };
@@ -91,10 +91,6 @@ impl State {
                 impl Reg for #register_name<#struct_name> {
                     type StateEnum = #store_name;
                 
-                    fn sync_state(&self) -> #store_name {
-                        // read each reg to determine if we are in this state still
-                        unimplemented!();
-                    }
                 }
 
                 impl From<#register_name<#struct_name>> for #store_name {
@@ -157,11 +153,11 @@ impl State {
 
                         impl AnyReg for #register_name<#concrete_type> {}
 
-                        impl From<#register_name<#concrete_type>> for #store_name {
+                        /*impl From<#register_name<#concrete_type>> for #store_name {
                             fn from(reg: #register_name<#concrete_type>) -> Self {
                                 unimplemented!();
                             }
-                        }
+                        }*/
 
                         impl TryFrom<#store_name> for #register_name<#concrete_type> {
                             type Error = (kernel::ErrorCode, #store_name);
@@ -862,7 +858,8 @@ impl MacroInput {
 fn add_imports() -> proc_macro2::TokenStream {
     quote!(
         use kernel::power_manager::{
-            Peripheral, State, SubState, StateEnum, Reg, Store, PowerManager, PowerError, Merge, AnyReg,
+            Peripheral, State, SubState, StateEnum, Reg, Store, PowerManager,
+            PowerError, Merge, AnyReg, SyncState
         };
         use core::marker::PhantomData;
         use core::mem::transmute;
