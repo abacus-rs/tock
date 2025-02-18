@@ -31,6 +31,69 @@ pub const UARTE0_BASE: usize = 0x40002000;
 // pub const UARTE0_BASE: StaticRef<UarteRegisters> =
 //     unsafe { StaticRef::new(0x40002000 as *const UarteRegisters) };
 
+// ADD SYNC STATE IMPLEMENTATION
+impl SyncState for Nrf52UarteRegisters<Active<RxIdle, TxIdle>> {
+    type SyncStateEnum = Nrf52UarteStore;
+    fn sync_state(self) -> Self::SyncStateEnum {
+        self.into()
+    }
+}
+
+impl SyncState for Nrf52UarteRegisters<Off> {
+    type SyncStateEnum = Nrf52UarteStore;
+    fn sync_state(self) -> Self::SyncStateEnum {
+        self.into()
+    }
+}
+
+impl SyncState for Nrf52UarteRegisters<Active<Rx, TxIdle>> {
+    type SyncStateEnum = Nrf52UarteStore;
+    fn sync_state(self) -> Self::SyncStateEnum {
+        // Check if Rx finished interrupt fired.
+        if self.event_endrx.is_set(Event::READY) {
+            unsafe { transmute::<_, Nrf52UarteRegisters<Active<RxIdle, TxIdle>>>(self).into() }
+        } else {
+            self.into()
+        }
+    }
+}
+
+impl SyncState for Nrf52UarteRegisters<Active<RxIdle, Tx>> {
+    type SyncStateEnum = Nrf52UarteStore;
+    fn sync_state(self) -> Self::SyncStateEnum {
+        // Check if Tx finished interrupt fired.
+        if self.event_endtx.is_set(Event::READY) {
+            unsafe { transmute::<_, Nrf52UarteRegisters<Active<RxIdle, TxIdle>>>(self).into() }
+        } else {
+            self.into()
+        }
+    }
+}
+
+impl SyncState for Nrf52UarteRegisters<Active<Rx, Tx>> {
+    type SyncStateEnum = Nrf52UarteStore;
+    fn sync_state(self) -> Self::SyncStateEnum {
+        // Check if Rx finished interrupt fired.
+        if self.event_endrx.is_set(Event::READY) {
+            let reg = unsafe { transmute::<_, Nrf52UarteRegisters<Active<RxIdle, Tx>>>(self) };
+
+            if reg.event_endtx.is_set(Event::READY) {
+                unsafe { transmute::<_, Nrf52UarteRegisters<Active<RxIdle, TxIdle>>>(reg).into() }
+            } else {
+                reg.into()
+            }
+        } else {
+            if self.event_endtx.is_set(Event::READY) {
+                unsafe { transmute::<_, Nrf52UarteRegisters<Active<Rx, TxIdle>>>(self) }.into()
+            } else {
+                self.into()
+            }
+        }
+    }
+}
+
+// END SYNC STATE IMPLEMENTATION
+
 #[repr(C)]
 #[process_register_block(
     peripheral_name = "Nrf52Uarte",
@@ -61,9 +124,11 @@ pub struct UarteRegisters {
     #[RegAttributes([Active(Any, Any)], ReadWrite, NctsEvent)]
     event_ncts: ReadWrite<u32, Event::Register>,
     _reserved3: [u32; 2],
+    // #[RegInterrupt(Active(Any, Any), Event::READY, Active(RxIdle, Any))]
     #[RegAttributes([Active(Any, Any)], ReadWrite, EndRxEvent)]
     event_endrx: ReadWrite<u32, Event::Register>,
     _reserved4: [u32; 3],
+    // #[RegInterrupt(Active(Any, TxIdle), Event::READY)]
     #[RegAttributes([Active(Any, Any)], ReadWrite, EndTxEvent)]
     event_endtx: ReadWrite<u32, Event::Register>,
     #[RegAttributes([Active(Any, Any)], ReadWrite, ErrorEvent)]
