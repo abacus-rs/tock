@@ -76,27 +76,15 @@ pub trait PowerManager<P: Peripheral> {
         self.store_power(new_state_store);
     }
 
-    fn recover_anytype<S, R>(&self, reg: R) -> Option<S::Reg>
+    fn into_state_enum<R>(&self, reg: R) -> Option<R::StateEnum>
     where
-        S: State<StateEnum = P::StateEnum>,
         R: Reg<StateEnum = P::StateEnum>
             + Merge<P::StateEnum, Output = Result<P::StateEnum, P::StateEnum>>
             + AnyReg,
     {
         let original = self.retrieve_power_copy()?;
 
-        let merged_type_enum = reg.merge(original);
-
-        match merged_type_enum {
-            Ok(state_enum) => {
-                if let Ok(reg) = S::Reg::try_from(state_enum) {
-                    Some(reg)
-                } else {
-                    None
-                }
-            }
-            Err(_) => None,
-        }
+        reg.merge(original).ok()
     }
 }
 
