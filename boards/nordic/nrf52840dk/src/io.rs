@@ -7,7 +7,11 @@ use kernel::debug::IoWrite;
 use kernel::hil::uart;
 use kernel::hil::uart::Configure;
 
-use nrf52840::uart::{Uarte, UARTE0_BASE};
+use kernel::power_manager::PowerManager;
+use nrf52840::{
+    power,
+    uart::{Uarte, UARTE0_BASE},
+};
 
 enum Writer {
     WriterUart(/* initialized */ bool),
@@ -35,7 +39,9 @@ impl IoWrite for Writer {
                 // Here, we create a second instance of the Uarte struct.
                 // This is okay because we only call this during a panic, and
                 // we will never actually process the interrupts
-                let uart = Uarte::new(UARTE0_BASE);
+                let power_manager = nrf52840::power_manager::Nrf52840PowerManager::new();
+
+                let uart = Uarte::new(&power_manager);
                 if !*initialized {
                     *initialized = true;
                     let _ = uart.configure(uart::Parameters {
@@ -50,7 +56,6 @@ impl IoWrite for Writer {
                     unsafe {
                         uart.send_byte(c);
                     }
-                    while !uart.tx_ready() {}
                 }
             }
             Writer::WriterRtt(rtt_memory) => {

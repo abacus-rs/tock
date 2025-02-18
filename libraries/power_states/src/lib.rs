@@ -1188,8 +1188,9 @@ pub fn entry_point(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // This is only valid to be placed upon functions.
     let ast: ItemFn = syn::parse(item).expect("entry point unwrap");
 
-    let function_name = &ast.sig.ident;
+    let function_sig = &ast.sig;
     let function_block = &ast.block.stmts;
+    let function_vis = &ast.vis;
 
     // We expect this to be a member function of the struct that contains
     // the power manager. (TODO: rethink this assumption)
@@ -1199,7 +1200,7 @@ pub fn entry_point(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Prepend check_interrupts_shim to body of fn.
     quote! {
-        pub fn #function_name(&self) {
+        #function_vis #function_sig {
             #check_interrupts_shim
             #(#function_block)*
         }
