@@ -7,6 +7,8 @@ use cortexm4::{nvic, CortexM4, CortexMVariant};
 use kernel::{platform::chip::InterruptService, power_manager::PowerManager};
 use nrf5x::temperature::Nrf5xTempPeripheral;
 
+use crate::uart::Nrf52UartePeripheral;
+
 pub struct NRF52<'a, I: InterruptService + 'a> {
     mpu: cortexm4f::mpu::MPU,
     userspace_kernel_boundary: cortexm4f::syscall::SysCall,
@@ -30,7 +32,7 @@ impl<'a, I: InterruptService + 'a> NRF52<'a, I> {
 /// constructed manually in main.rs.
 pub struct Nrf52DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTempPeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral> + PowerManager<Nrf52UartePeripheral>,
 {
     pub acomp: crate::acomp::Comparator<'a>,
     pub ecb: crate::aes::AesECB<'a>,
@@ -42,7 +44,7 @@ where
     pub timer0: crate::timer::TimerAlarm<'a>,
     pub timer1: crate::timer::TimerAlarm<'a>,
     pub timer2: crate::timer::Timer,
-    pub uarte0: crate::uart::Uarte<'a>,
+    pub uarte0: crate::uart::Uarte<'a, PM>,
     pub spim0: crate::spi::SPIM<'a>,
     pub twi1: crate::i2c::TWI<'a>,
     pub spim2: crate::spi::SPIM<'a>,
@@ -54,7 +56,7 @@ where
 
 impl<'a, PM> Nrf52DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTempPeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral> + PowerManager<Nrf52UartePeripheral>,
 {
     pub fn new(pm: &'a PM) -> Self {
         Self {
@@ -68,7 +70,7 @@ where
             timer0: crate::timer::TimerAlarm::new(0),
             timer1: crate::timer::TimerAlarm::new(1),
             timer2: crate::timer::Timer::new(2),
-            uarte0: crate::uart::Uarte::new(crate::uart::UARTE0_BASE),
+            uarte0: crate::uart::Uarte::new(pm),
             spim0: crate::spi::SPIM::new(0),
             twi1: crate::i2c::TWI::new_twi1(),
             spim2: crate::spi::SPIM::new(2),
@@ -86,7 +88,7 @@ where
 }
 impl<'a, PM> kernel::platform::chip::InterruptService for Nrf52DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTempPeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral> + PowerManager<Nrf52UartePeripheral>,
 {
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
         match interrupt {
