@@ -97,6 +97,7 @@ impl SyncState for Nrf52UarteRegisters<Active<Rx, Tx>> {
 #[repr(C)]
 #[process_register_block(
     peripheral_name = "Nrf52Uarte",
+    register_base_addr = "0x40002000",
     states = [
         Off => [Active(RxIdle, TxIdle)],
         Active(RxIdle, TxIdle) => [Active(RxIdle, Tx), Active(Rx, TxIdle), Off] {ActiveIdle},

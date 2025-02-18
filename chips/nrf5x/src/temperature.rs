@@ -20,8 +20,6 @@ use kernel::ErrorCode;
 
 use power_states::{entry_point, process_register_block};
 
-pub const TEMPERATURE_BASE: usize = 0x4000C000;
-
 // HAND IMPLEMENTATION OF SYNC STATE FOR NOW
 impl SyncState for Nrf5xTempRegisters<Reading> {
     type SyncStateEnum = Nrf5xTempStore;
@@ -41,6 +39,7 @@ impl SyncState for Nrf5xTempRegisters<Off> {
 #[repr(C)]
 #[process_register_block(
     peripheral_name = "Nrf5xTemp",
+    register_base_addr = "0x4000C000",
     states = [
         Off => [Reading],
         Reading => [Off],
