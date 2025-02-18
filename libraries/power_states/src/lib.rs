@@ -241,6 +241,7 @@ mod custom_keywords {
     syn::custom_keyword!(peripheral_name);
     syn::custom_keyword!(registers);
     syn::custom_keyword!(states);
+    syn::custom_keyword!(register_base_addr);
 }
 
 #[derive(Clone)]
@@ -583,6 +584,7 @@ impl Parse for RegisterAttributes {
 struct MacroInput {
     peripheral_name: String,
     states: Punctuated<State, syn::Token![,]>,
+    base_addr: String,
 }
 
 impl MacroInput {
@@ -875,6 +877,11 @@ impl Parse for MacroInput {
         let peripheral_name: syn::LitStr = input.parse()?;
         let _: syn::Token![,] = input.parse()?;
 
+        let _: custom_keywords::register_base_addr = input.parse()?;
+        let _: syn::Token![=] = input.parse()?;
+        let base_addr: syn::LitStr = input.parse().expect("error with base addr");
+        let _: syn::Token![,] = input.parse()?;
+
         let _: custom_keywords::states = input.parse()?;
         let _: syn::Token![=] = input.parse()?;
         let states_content;
@@ -885,6 +892,7 @@ impl Parse for MacroInput {
         Ok(MacroInput {
             peripheral_name: peripheral_name.value(),
             states,
+            base_addr: base_addr.value(),
         })
     }
 }
