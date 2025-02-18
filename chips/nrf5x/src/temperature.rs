@@ -22,25 +22,21 @@ use power_states::{entry_point, process_register_block};
 
 pub const TEMPERATURE_BASE: usize = 0x4000C000;
 
-// Attribute macro
-// #[states(peripheral = "Nrf5xTemp", registers = RegisterBlock)]
-// pub enum TemperatureStates {
-//     Off,
-//     Reading
-// }
-
-// Function-like macro
-
-// -----------------------------------------------------------------------------------------
-// TODO: add these to macro
-/*impl<S: State> Nrf5xTempRegister<S> {
-    // TODO: Likely want to add some capability here that restricts this.
-    pub fn new() -> Nrf5xTempRegister<S> {
-        let reg = unsafe { StaticRef::new(TEMPERATURE_BASE as *const Nrf5xTempRegisterBlock<S>) };
-        Nrf5xTempRegister { reg: reg }
+// HAND IMPLEMENTATION OF SYNC STATE FOR NOW
+impl SyncState for Nrf5xTempRegisters<Reading> {
+    type SyncStateEnum = Nrf5xTempStore;
+    fn sync_state(self) -> Self::SyncStateEnum {
+        self.into()
     }
 }
-*/
+
+impl SyncState for Nrf5xTempRegisters<Off> {
+    type SyncStateEnum = Nrf5xTempStore;
+    fn sync_state(self) -> Self::SyncStateEnum {
+        self.into()
+    }
+}
+// END HAND IMPLEMENTATION OF SYNC STATE
 
 #[repr(C)]
 #[process_register_block(
