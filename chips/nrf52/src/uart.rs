@@ -20,7 +20,7 @@ use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 use nrf5x::pinmux;
 
-use power_states::process_register_block;
+use power_states::{entry_point, process_register_block};
 
 const UARTE_MAX_BUFFER_SIZE: u32 = 0xff;
 
@@ -352,7 +352,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                 //
                 // TODO: THIS IS A POTENTIAL MISMATCH BETWEEN SPEC / IMPLEMENTATION
                 // ABACUS HAS CAUGHT (THIS IS GENERATING A COMPILER ERROR)
-                registers.event_endtx.write(Event::READY::CLEAR);
+                // registers.event_endtx.write(Event::READY::CLEAR);
 
                 registers
                     .into_enable(self.power_manager)
@@ -459,22 +459,19 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                             });
                         });
 
-                        // Determin if Any is Rx or RxIdle
-                        if let Some(reg) = self
-                            .power_manager
-                            .recover_anytype::<Active<Rx, TxIdle>, _>(registers)
-                        {
-                            unimplemented!("Return this type here");
+                        // Determine if Any is Rx or RxIdle
+                        match self.power_manager.into_state_enum(registers).unwrap() {
+                            Nrf52UarteStore::ActiveRx(reg) => {
+                                // We are in Active<Rx, TxIdle> state, a valid storable state
+                                // so we return this.
+                                Ok(reg.into())
+                            }
+                            Nrf52UarteStore::ActiveIdle(reg) => {
+                                // We need to power off before return.
+                                return reg.into_off(self.power_manager).into_closure_return();
+                            }
+                            _ => unreachable!(),
                         }
-
-                        if let Some(reg) = self
-                            .power_manager
-                            .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
-                        {
-                            unimplemented!("Power off peripheral, then return");
-                        }
-
-                        unreachable!()
                     } else {
                         // Not all bytes have been transmitted then update offset and continue transmitting
                         self.offset.set(self.offset.get() + tx_bytes);
@@ -488,28 +485,20 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
 
                         if let RegisterResult::Ok(reg) = new_register {
                             self.enable_tx_interrupts(&reg);
-                            Ok(reg.into())
+                            // Since we have just started a TX this is guaranteed to be storable. Need to recover
+                            // AnyType.
+                            match self.power_manager.into_state_enum(reg).unwrap() {
+                                Nrf52UarteStore::ActiveRxTx(reg) => Ok(reg.into()),
+                                Nrf52UarteStore::ActiveTx(reg) => Ok(reg.into()),
+                                _ => unreachable!(),
+                            }
                         } else {
+                            // Case of attempting to transition failed (not enough power remains)
                             unimplemented!()
                         }
                     }
                 } else {
-                    // Determine if Any is Rx or RxIdle
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<Rx, TxIdle>, _>(registers)
-                    {
-                        unimplemented!("Return this type here");
-                    }
-
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
-                    {
-                        unimplemented!("Power off peripheral, then return");
-                    }
-
-                    unreachable!()
+                    unimplemented!() // We can easily add this, but want to think more about this
                 }
             });
 
@@ -539,22 +528,19 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                             });
                         });
 
-                        // Shutdown peripheral if we are in TxIdle
-                        if let Some(reg) = self
-                            .power_manager
-                            .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
-                        {
-                            unimplemented!("Power off peripheral, then return");
+                        // Recover Any and shutdown peripheral if we are in TxIdle
+                        match self.power_manager.into_state_enum(registers).unwrap() {
+                            Nrf52UarteStore::ActiveTx(reg) => {
+                                // We are in Active<RxIdle, Tx> state, a valid storable state
+                                // so we return this.
+                                Ok(reg.into())
+                            }
+                            Nrf52UarteStore::ActiveIdle(reg) => {
+                                // We need to power off before return.
+                                return reg.into_off(self.power_manager).into_closure_return();
+                            }
+                            _ => unreachable!(),
                         }
-
-                        if let Some(reg) = self
-                            .power_manager
-                            .recover_anytype::<Active<RxIdle, Tx>, _>(registers)
-                        {
-                            unimplemented!("Return this type here");
-                        }
-
-                        unreachable!()
                     } else {
                         // In the normal case, we need to either pass call the callback
                         // or do another read to get more bytes.
@@ -580,21 +566,18 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                             });
 
                             // Determine if Any is Tx or TxIdle
-                            if let Some(reg) = self
-                                .power_manager
-                                .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
-                            {
-                                unimplemented!("Power off peripheral, then return");
+                            match self.power_manager.into_state_enum(registers).unwrap() {
+                                Nrf52UarteStore::ActiveTx(reg) => {
+                                    // We are in Active<RxIdle, Tx> state, a valid storable state
+                                    // so we return this.
+                                    Ok(reg.into())
+                                }
+                                Nrf52UarteStore::ActiveIdle(reg) => {
+                                    // We need to power off before return.
+                                    return reg.into_off(self.power_manager).into_closure_return();
+                                }
+                                _ => unreachable!(),
                             }
-
-                            if let Some(reg) = self
-                                .power_manager
-                                .recover_anytype::<Active<Rx, TxIdle>, _>(registers)
-                            {
-                                unimplemented!("Return this type here");
-                            }
-
-                            unreachable!()
                         } else {
                             // Setup how much we can read. We already made sure that
                             // this will fit in the buffer.
@@ -610,53 +593,30 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                             if let RegisterResult::Ok(reg) = new_register {
                                 self.enable_rx_interrupts(&reg);
 
-                                // Determine if Any is Tx or TxIdle
-                                if let Some(reg) = self
-                                    .power_manager
-                                    .recover_anytype::<Active<Rx, TxIdle>, _>(reg)
-                                {
-                                    unimplemented!("Return this type here");
+                                // Determine if Any is Tx or TxIdle -- for something like this if one of the substates
+                                // is storable, we know the whole type is storable so we can avoid these matches.
+                                match self.power_manager.into_state_enum(reg).unwrap() {
+                                    Nrf52UarteStore::ActiveRx(reg) => Ok(reg.into()),
+                                    Nrf52UarteStore::ActiveRxTx(reg) => Ok(reg.into()),
+                                    _ => unreachable!(),
                                 }
-
-                                if let Some(reg) = self
-                                    .power_manager
-                                    .recover_anytype::<Active<RxIdle, TxIdle>, _>(reg)
-                                {
-                                    unimplemented!("Power off peripheral, then return");
-                                }
-
-                                unreachable!()
                             } else {
                                 unimplemented!()
                             }
                         }
                     }
                 } else {
-                    // Determine if Any is Tx or TxIdle
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<RxIdle, TxIdle>, _>(registers)
-                    {
-                        unimplemented!("Power off peripheral, then return");
-                    }
-
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<RxIdle, Tx>, _>(registers)
-                    {
-                        unimplemented!("Return this type here");
-                    }
-
-                    unreachable!()
+                    unimplemented!() // trivial match to exit, but not sure best way to do this
                 }
             });
     }
 
     /// Transmit one byte at the time and the client is responsible for polling
     /// This is used by the panic handler
+    #[entry_point]
     pub unsafe fn send_byte(&self, byte: u8) {
         self.power_manager
-            .use_power_expecting::<_, Active<Any, TxIdle>>(|registers| {
+            .use_power_expecting::<_, Active<Any, Any>>(|registers| {
                 self.tx_remaining_bytes.set(1);
                 registers.event_endtx.write(Event::READY::CLEAR);
                 // precaution: copy value into variable with static lifetime
@@ -664,27 +624,41 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                 registers.txd_ptr.set(core::ptr::addr_of!(BYTE) as u32);
                 registers.txd_maxcnt.write(Counter::COUNTER.val(1));
 
-                if let RegisterResult::Ok(tx_registers) = registers.into_starttx(self.power_manager)
-                {
-                    // Determine if Any is Rx or RxIdle
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<RxIdle, Tx>, _>(tx_registers)
-                    {
-                        unimplemented!("Power off peripheral, then return");
+                match self.power_manager.into_state_enum(registers).unwrap() {
+                    Nrf52UarteStore::ActiveIdle(reg) => {
+                        let reg_start_tx = reg.into_starttx(self.power_manager);
+                        if let RegisterResult::Ok(reg) = reg_start_tx {
+                            while !self.tx_ready(&reg) {}
+                        } else {
+                            unimplemented!()
+                        }
                     }
-
-                    if let Some(reg) = self
-                        .power_manager
-                        .recover_anytype::<Active<Rx, Tx>, _>(tx_registers)
-                    {
-                        unimplemented!("Return this type here");
+                    Nrf52UarteStore::ActiveRx(reg) => {
+                        let reg_start_tx = reg.into_starttx(self.power_manager);
+                        if let RegisterResult::Ok(reg) = reg_start_tx {
+                            while !self.tx_ready(&reg) {}
+                        } else {
+                            unimplemented!()
+                        }
                     }
+                    Nrf52UarteStore::ActiveTx(reg) => {
+                        // stop ongoing TX
+                        let idle_tx_register = reg.into_stoptx(self.power_manager);
+                        if let RegisterResult::Ok(reg) = idle_tx_register {
+                            let reg_start_tx = reg.into_starttx(self.power_manager);
+                            if let RegisterResult::Ok(reg) = reg_start_tx {
+                                while !self.tx_ready(&reg) {}
+                            } else {
+                                unimplemented!()
+                            }
+                        } else {
+                            unimplemented!()
+                        }
+                    }
+                    _ => unreachable!(),
+                };
 
-                    unreachable!()
-                } else {
-                    unimplemented!()
-                }
+                unimplemented!()
             });
     }
 
@@ -826,6 +800,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a,
         self.rx_client.set(client);
     }
 
+    // FOUND ANOTHER BUG HERE WITH UART LOGIC
     fn receive_buffer(
         &self,
         rx_buf: &'static mut [u8],
@@ -841,7 +816,8 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a,
         self.offset.set(0);
         self.rx_buffer.replace(rx_buf);
 
-        self.power_manager
+        let begin_rx = self
+            .power_manager
             .use_power_expecting::<_, Active<RxIdle, Any>>(|registers| {
                 self.set_rx_dma_pointer_to_buffer(&registers);
 
@@ -853,13 +829,24 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a,
 
                 // ABACUS TODO: This is interesting because this assumes we may be transmitting and always
                 // first issues a stop before starting a transmit.
-                self.registers.task_stoprx.write(Task::ENABLE::SET);
-                self.registers.task_startrx.write(Task::ENABLE::SET);
+                // self.registers.task_stoprx.write(Task::ENABLE::SET);
+                // self.registers.task_startrx.write(Task::ENABLE::SET);
 
-                self.enable_rx_interrupts();
+                let rx_registers = registers.into_startrx(self.power_manager);
 
-                unimplemented!()
+                if let RegisterResult::Ok(reg) = rx_registers {
+                    self.enable_rx_interrupts(&reg);
+
+                    match self.power_manager.into_state_enum(reg).unwrap() {
+                        Nrf52UarteStore::ActiveRx(reg) => Ok(reg.into()),
+                        Nrf52UarteStore::ActiveRxTx(reg) => Ok(reg.into()),
+                        _ => unreachable!(),
+                    }
+                } else {
+                    unimplemented!()
+                }
             });
+
         Ok(())
     }
 
@@ -878,9 +865,22 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a,
             // here?
             self.power_manager
                 .use_power_expecting::<_, Active<Rx, Any>>(|registers| {
-                    registers
-                        .into_stoprx(self.power_manager)
-                        .into_closure_return()
+                    let stop_rx_reg = registers.into_stoprx(self.power_manager);
+
+                    if let RegisterResult::Ok(reg) = stop_rx_reg {
+                        // We are in Active<Rx, TxIdle> state, a valid storable state
+                        // so we return this.
+                        match self.power_manager.into_state_enum(reg).unwrap() {
+                            Nrf52UarteStore::ActiveTx(reg) => Ok(reg.into()),
+                            Nrf52UarteStore::ActiveIdle(reg) => {
+                                // We need to power off before return.
+                                return reg.into_off(self.power_manager).into_closure_return();
+                            }
+                            _ => unreachable!(),
+                        }
+                    } else {
+                        unimplemented!()
+                    }
                 });
 
             // Is this errorcode here correct?
