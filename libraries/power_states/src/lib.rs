@@ -1101,6 +1101,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 });
 
     let struct_output = quote! {
+        #[repr(C)]
         pub struct #struct_name_ident<S: State> {
             #(#field_details),*
         }
