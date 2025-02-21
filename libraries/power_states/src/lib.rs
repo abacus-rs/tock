@@ -68,7 +68,9 @@ impl State {
                     type Output = #register_name<#merge_generic_ident>;
 
                     fn merge(self, _other: #register_name<#merge_generic_ident>) -> Self::Output {
-                        unimplemented!();
+                        unsafe {
+                            transmute::<#register_name<#concrete_type>, #register_name<#merge_generic_ident>>(self)
+                        }
                     }
                 }
             }
@@ -126,6 +128,7 @@ impl State {
             if any_positions.is_some() {
                 result.extend(reg_merge);
 
+                let states_vec = merge_body.clone();
                 let merge_body = merge_body.iter().map(|state|{
                     let enum_variant = state.shortname.clone();
 
@@ -136,6 +139,20 @@ impl State {
                     } else {
                         quote! {
                             #store_name::#enum_variant(reg) => Err(#store_name::#enum_variant(reg))
+                        }
+                    }
+                });
+
+                let try_from_body = states_vec.iter().map(|state| {
+                    let enum_variant = state.shortname.clone();
+                    let enum_var_name = state.form_concrete_state_type();
+                    if is_mergeable(self, state) {
+                        quote! {
+                            #store_name::#enum_variant(reg) => Ok( unsafe {transmute::<#register_name<#enum_var_name>, Self>(reg)}),
+                        }
+                    } else {
+                        quote! {
+                            #store_name::#enum_variant(reg) => Err((kernel::ErrorCode::INVAL, #store_name::#enum_variant(reg))),
                         }
                     }
                 });
@@ -162,7 +179,9 @@ impl State {
                         impl TryFrom<#store_name> for #register_name<#concrete_type> {
                             type Error = (kernel::ErrorCode, #store_name);
                             fn try_from(store: #store_name) -> Result<Self, Self::Error> {
-                                unimplemented!();
+                                match store {
+                                    #(#try_from_body)*
+                                }
                             }
                         }
                 });
@@ -584,7 +603,7 @@ impl Parse for RegisterAttributes {
 struct MacroInput {
     peripheral_name: String,
     states: Punctuated<State, syn::Token![,]>,
-    base_addr: String,
+    base_addr: syn::LitInt,
 }
 
 impl MacroInput {
@@ -674,6 +693,14 @@ impl MacroInput {
             }
         });
 
+        let debug_body = self.states.iter().map(|state| {
+            let enum_variant = state.shortname.clone();
+            let state_tokens = substate_tokens(state.clone());
+            quote! {
+                #store_name::#enum_variant(reg) => write!(f, "{}", stringify!(#enum_variant))
+            }
+        });
+
         output.extend(quote! {
             pub enum #store_name{
                 #(#store_variants),*
@@ -690,6 +717,14 @@ impl MacroInput {
                 fn sync_state(self) -> Self {
                     match self {
                         #(#sync_state_body),*
+                    }
+                }
+            }
+
+            impl core::fmt::Debug for #store_name {
+                fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    match self {
+                        #(#debug_body),*
                     }
                 }
             }
@@ -879,7 +914,7 @@ impl Parse for MacroInput {
 
         let _: custom_keywords::register_base_addr = input.parse()?;
         let _: syn::Token![=] = input.parse()?;
-        let base_addr: syn::LitStr = input.parse().expect("error with base addr");
+        let base_addr: syn::LitInt  = input.parse().expect("error with base addr");
         let _: syn::Token![,] = input.parse()?;
 
         let _: custom_keywords::states = input.parse()?;
@@ -892,7 +927,7 @@ impl Parse for MacroInput {
         Ok(MacroInput {
             peripheral_name: peripheral_name.value(),
             states,
-            base_addr: base_addr.value(),
+            base_addr: base_addr,
         })
     }
 }
@@ -911,6 +946,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     eprintln!("register: {:?}", register);
 
+    let base_addr = parsed_input.base_addr.clone(); 
     // IN REGARDS TO THE NEW METHOD BELOW:
     // The existence of this method destroys all guarantees. We need this
     // to store the anytype, but need to do this in a controlled way so that 
@@ -922,7 +958,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
         impl <S: State> #register<S> {
             pub fn new() -> #register<S> {
-                let reg = unsafe { StaticRef::new(0x4000C000 as *const #register_block<S>) };
+                let reg = unsafe { StaticRef::new(#base_addr as *const #register_block<S>) };
                 #register { reg }
             }
         }
@@ -1181,13 +1217,13 @@ fn is_mergeable(state1: &State, state2: &State) -> bool {
 
     // For every substate, the substates may only be different if 
     // one of the substates is ANY.
-    for (substate1, substate2) in state1.substates.iter().zip(state2.substates.iter()) {
-        if substate1 != substate2 {
-            if substate1.to_string() != "Any" && substate2.to_string() != "Any" {
-                return false;
-            }
-        }
-    }
+    // for (substate1, substate2) in state1.substates.iter().zip(state2.substates.iter()) {
+    //     if substate1 != substate2 {
+    //         if substate1.to_string() != "Any" && substate2.to_string() != "Any" {
+    //             return false;
+    //         }
+    //     }
+    // }
 
     return true
 }
