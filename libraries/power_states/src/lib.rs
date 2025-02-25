@@ -5,7 +5,7 @@ use syn::{
     bracketed, parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated, DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, ItemFn, PathArguments, Type, Variant, Visibility
 };
 
-use std::collections::{hash_set::HashSet, HashMap}; 
+use std::{any::Any, collections::{hash_set::HashSet, HashMap}}; 
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 struct State {
@@ -54,34 +54,7 @@ impl State {
         // Form struct name / generics in carrots
         let concrete_type = self.form_concrete_state_type();
 
-        let reg_merge = if any_positions.is_some() {
-            let mut merge_generic_state = self.clone();
-
-            for item in &any_positions.clone().unwrap() {
-                merge_generic_state.substates[item.0] = item.1.clone();
-            }
-
-            let merge_generic_ident = merge_generic_state.form_concrete_state_type();
-            
-            quote!{
-                impl Merge<#register_name<#merge_generic_ident>> for #register_name<#concrete_type> {
-                    type Output = #register_name<#merge_generic_ident>;
-
-                    fn merge(self, _other: #register_name<#merge_generic_ident>) -> Self::Output {
-                        unsafe {
-                            transmute::<#register_name<#concrete_type>, #register_name<#merge_generic_ident>>(self)
-                        }
-                    }
-                }
-            }
-        } else {
-            quote!{}
-        };
-
-        if only_any {
-            return reg_merge;
-        }
-
+        
         // Form full struct using formed name
         if self.substates.is_empty() {
             result.extend(quote! {
@@ -126,7 +99,6 @@ impl State {
             });
 
             if any_positions.is_some() {
-                result.extend(reg_merge);
 
                 let states_vec = merge_body.clone();
                 let merge_body = merge_body.iter().map(|state|{
@@ -134,7 +106,7 @@ impl State {
 
                     if is_mergeable(self, state) {
                         quote! {
-                            #store_name::#enum_variant(reg) => Ok(self.merge(reg).into())
+                            #store_name::#enum_variant(reg) => Ok(reg.merge(self).into())
                         }
                     } else {
                         quote! {
@@ -143,12 +115,15 @@ impl State {
                     }
                 });
 
+                // TODO: Check that we got the merge logic correct here.
                 let try_from_body = states_vec.iter().map(|state| {
                     let enum_variant = state.shortname.clone();
                     let enum_var_name = state.form_concrete_state_type();
-                    if is_mergeable(self, state) {
+                    if is_valid_into(self, state) {
                         quote! {
-                            #store_name::#enum_variant(reg) => Ok( unsafe {transmute::<#register_name<#enum_var_name>, Self>(reg)}),
+                            #store_name::#enum_variant(reg) => Ok(
+                                unsafe { transmute::<_, Self>(reg) }
+                            ),
                         }
                     } else {
                         quote! {
@@ -739,9 +714,14 @@ impl MacroInput {
         register_name: &Ident,
         store_name: &Ident,
     ) -> (proc_macro2::TokenStream, HashMap<String, State>) {
+        let mut output = proc_macro2::TokenStream::new();
+        
+        // The other state hashes include the substates. This is strictly 
+        // looking at the State name
+        let mut strict_state_hash = HashSet::new();
+
         let mut created_states: HashSet<syn::Ident> = HashSet::new();
 
-        let mut output = proc_macro2::TokenStream::new();
         let mut unique_substates = HashSet::new();
         unique_substates.insert(format_ident!("Any"));
 
@@ -751,6 +731,60 @@ impl MacroInput {
 
         let mut state_map = HashMap::new();
         for state in &self.states {
+            if !strict_state_hash.contains(state.ident.to_string().as_str()) {
+                let state_ident = state.ident.clone();
+                if state.substates.is_empty(){
+                    output.extend(
+                        quote!{
+                            impl <A1> Merge<#register_name<A1>> for #register_name<#state_ident>
+                            where 
+                                #state_ident: State,
+                                A1: State,
+                            {
+                                type Output = #register_name<#state_ident>;
+                                fn merge(self, _other: #register_name<A1>) -> Self::Output {
+                                    self
+                                }
+                            } 
+                        }
+                    );
+                } else if state.substates.len() == 2 {
+                    output.extend(
+                        quote!{
+                            impl <A1, A2, B1, B2> Merge<#register_name<#state_ident<A1, A2>>> for #register_name<#state_ident<B1, B2>>
+                            where 
+                                A1: SubState + MergeSubState<A1, B1>,
+                                A2: SubState + MergeSubState<A2, B2>,
+                                B1: SubState + ConcreteSubState,
+                                B2: SubState + ConcreteSubState,
+                                #state_ident<A1, A2>: State,
+                                #state_ident<B1, B2>: State,
+                                #state_ident<
+                                    <A1 as MergeSubState<A1, B1>>::Output,
+                                    <A2 as MergeSubState<A2, B2>>::Output
+                                >: State,
+                                {
+                                    type Output = #register_name<#state_ident<
+                                        <A1 as MergeSubState<A1, B1>>::Output,
+                                        <A2 as MergeSubState<A2, B2>>::Output
+                                    >>;
+                                    
+                                    fn merge(self, _other: #register_name<#state_ident<A1, A2>>) -> Self::Output {
+                                        unsafe {
+                                            transmute::<#register_name<#state_ident<B1, B2>>, Self::Output>(self) 
+                                        }
+                                    }
+
+                                }
+                        }
+                    );
+                } else {
+                    unimplemented!("Only 2 substates are supported.");
+                }
+
+                strict_state_hash.insert(state.ident.to_string());
+            }
+
             // State hash map used for name mapping later.
             state_map.insert(state.form_concrete_state_type().to_string(), state.clone());
 
@@ -822,11 +856,10 @@ impl MacroInput {
 
                 // To avoid duplicate implementations for a type, check if it has already been used.
                 let concrete_state_str = state.form_concrete_state_type().to_string();
-                eprintln!("concrete_state_str: {:?}", concrete_state_str); 
                 if state_hash.contains(&concrete_state_str) {
-                    if any_positions.is_some() {
-                        output.extend(state.generate_state(register_name, store_name, &struct_name, all_states_vec.clone(), any_positions, true));
-                    } 
+                    // if any_positions.is_some() {
+                    //     output.extend(state.generate_state(register_name, store_name, &struct_name, all_states_vec.clone(), any_positions, true));
+                    // } 
                         continue; // Skip creating this state, as it has already been created.
                 } else {
                     state_hash.insert(concrete_state_str.clone());
@@ -852,8 +885,20 @@ impl MacroInput {
         // create substates 
         for substate in unique_substates {
             let substate_ident = format_ident!("{}", substate);
+            let any_trait = if "Any" == substate_ident.to_string() {
+                quote! {
+                    impl AnySubState for #substate_ident {}
+                }
+            } else {
+                quote!{
+                    impl ConcreteSubState for #substate_ident {}
+                }
+            };
+
             output.extend(quote! {
                 pub struct #substate_ident {}
+
+                #any_trait
 
                 impl SubState for #substate_ident {}
             });
@@ -896,7 +941,7 @@ fn add_imports() -> proc_macro2::TokenStream {
     quote!(
         use kernel::power_manager::{
             Peripheral, State, SubState, StateEnum, Reg, Store, PowerManager,
-            PowerError, Merge, AnyReg, SyncState
+            PowerError, Merge, AnyReg, SyncState, AnySubState, ConcreteSubState, MergeSubState
         };
         use core::marker::PhantomData;
         use core::mem::transmute;
@@ -1200,6 +1245,18 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
             reg: WriteOnly<T, R>,
             associated_state: PhantomData<S>,
         }
+
+        // Implement SubState Merge logic
+        impl<T: SubState> MergeSubState<Any, T> for Any {
+            type Output = T;
+        }
+
+        
+        // impl<A, B> MergeSubState<A, B> for A {
+        //     type Output = A;
+        // }
+
+
     });
 
     result.extend(struct_output);
@@ -1228,6 +1285,28 @@ fn is_mergeable(state1: &State, state2: &State) -> bool {
     return true
 }
 
+// This is a helper function to determine if a state is valid to coerce into another 
+// for usage with try_into (e.g. Active<Any, Tx> => Active<Rx, Tx>). 
+fn is_valid_into(state1: &State, state2: &State) -> bool {
+    // Given 2 reg types, determine if they are mergeable
+
+    // If the states are NOT the same, they are not mergeable.
+    if state1.ident != state2.ident {
+        return false;
+    }
+
+    // For every substate, the substates may only be different if 
+    // one of the substates is ANY.
+    for (substate1, substate2) in state1.substates.iter().zip(state2.substates.iter()) {
+        if substate1 != substate2 {
+            if substate1.to_string() != "Any" && substate2.to_string() != "Any" {
+                return false;
+            }
+        }
+    }
+
+    return true
+}
 #[proc_macro_attribute]
 pub fn entry_point(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // This is only valid to be placed upon functions.
