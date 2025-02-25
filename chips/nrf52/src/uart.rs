@@ -369,7 +369,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
     }
 
     fn set_baud_rate(&self, baud_rate: u32, registers: &Nrf52UarteRegisters<Active<Any, Any>>) {
-        kernel::debug!("set buad rate");
         match baud_rate {
             1200 => registers.baudrate.set(0x0004F000),
             2400 => registers.baudrate.set(0x0009D000),
@@ -450,12 +449,10 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
         let mut completed_tx = false;
         let mut completed_rx = false;
 
-        kernel::debug!("handle interrupt");
         let _ = self
             .power_manager
             .use_power_expecting::<_, Active<Any, TxIdle>>(|registers| {
                 if self.tx_ready(&registers) {
-                    kernel::debug!("handle interrrupts tx ranch");
                     self.disable_tx_interrupts(&registers);
                     registers.event_endtx.write(Event::READY::CLEAR);
                     let tx_bytes = registers.txd_amount.get() as usize;
@@ -468,7 +465,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
 
                     // All bytes have been transmitted
                     if rem == 0 {
-                        kernel::debug!("HANDLE INTERRUPT tx done");
                         // Signal client write done
                         completed_tx = true;
 
@@ -481,7 +477,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                             }
                             Some(Nrf52UarteStore::ActiveIdle(reg)) => {
                                 // We need to power off before return.\
-                                kernel::debug!("[TX] turning off");
                                 return reg.into_off(self.power_manager).into_closure_return();
                             }
                             _ => {
@@ -498,7 +493,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                             .txd_maxcnt
                             .write(Counter::COUNTER.val(min(rem as u32, UARTE_MAX_BUFFER_SIZE)));
 
-                        kernel::debug!("HANDLE INTERRUPT TRANSMIT NEXT BYTE... remaining {}", rem);
                         let new_register = registers.into_starttx(self.power_manager);
 
                         if let RegisterResult::Ok(reg) = new_register {
@@ -538,7 +532,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
             .power_manager
             .use_power_expecting::<_, Active<RxIdle, Any>>(|registers| {
                 if self.rx_ready(&registers) {
-                    kernel::debug!("handle interrupt rx branch");
                     self.disable_rx_interrupts(&registers);
 
                     // Clear the ENDRX event
@@ -590,7 +583,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
 
                         let rem = self.rx_remaining_bytes.get();
                         if rem == 0 {
-                            kernel::debug!("HANDLE INTERRUPT rx done");
                             // Signal client that the read is done
                             completed_rx = true;
 
@@ -674,13 +666,25 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                 });
             });
         }
-        kernel::debug!("handle interrupt complete");
     }
 
     /// Transmit one byte at the time and the client is responsible for polling
     /// This is used by the panic handler
-    //#[entry_point]
+    #[entry_point]
     pub unsafe fn send_byte(&self, byte: u8) {
+        // ensure we are turned on
+        let _ = self
+            .power_manager
+            .use_power_expecting::<_, Off>(|registers| {
+                let registers = self.enable_uart(registers);
+
+                if let RegisterResult::Ok(registers) = registers {
+                    Ok(registers.into())
+                } else {
+                    unimplemented!()
+                }
+            });
+
         let _ = self
             .power_manager
             .use_power_expecting::<_, Active<Any, Any>>(|registers| {
@@ -696,6 +700,8 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                         let reg_start_tx = reg.into_starttx(self.power_manager);
                         if let RegisterResult::Ok(reg) = reg_start_tx {
                             while !self.tx_ready(&reg) {}
+
+                            return Ok(reg.into());
                         } else {
                             unimplemented!()
                         }
@@ -704,6 +710,8 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                         let reg_start_tx = reg.into_starttx(self.power_manager);
                         if let RegisterResult::Ok(reg) = reg_start_tx {
                             while !self.tx_ready(&reg) {}
+
+                            return Ok(reg.into());
                         } else {
                             unimplemented!()
                         }
@@ -715,6 +723,8 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                             let reg_start_tx = reg.into_starttx(self.power_manager);
                             if let RegisterResult::Ok(reg) = reg_start_tx {
                                 while !self.tx_ready(&reg) {}
+
+                                return Ok(reg.into());
                             } else {
                                 unimplemented!()
                             }
@@ -724,8 +734,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                     }
                     _ => unreachable!(),
                 };
-
-                unimplemented!()
             });
     }
 
@@ -793,10 +801,8 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
         self.tx_len.set(tx_len);
         self.offset.set(0);
         self.tx_buffer.replace(buf);
-        kernel::debug!("setup buffer transmit");
 
         self.set_tx_dma_pointer_to_buffer(&registers);
-        kernel::debug!("inside setup bufer transmit");
         registers
             .txd_maxcnt
             .write(Counter::COUNTER.val(min(tx_len as u32, UARTE_MAX_BUFFER_SIZE)));
@@ -822,9 +828,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Transmit<'a> for Uarte<'a
         tx_data: &'static mut [u8],
         tx_len: usize,
     ) -> Result<(), (ErrorCode, &'static mut [u8])> {
-        kernel::debug!("transmit buffer");
         // display tx_data as char
-        kernel::debug!("tx_data: {:?}", core::str::from_utf8(&tx_data[0..5]));
         if tx_len == 0 || tx_len > tx_data.len() {
             Err((ErrorCode::SIZE, tx_data))
         } else if self.tx_buffer.is_some() {
@@ -834,7 +838,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Transmit<'a> for Uarte<'a
             let check_off = self
                 .power_manager
                 .use_power_expecting::<_, Off>(|registers| {
-                    kernel::debug!("UART was off so enabling");
                     if let RegisterResult::Ok(reg) = self.enable_uart(registers) {
                         Ok(reg.into())
                     } else {
@@ -858,7 +861,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Transmit<'a> for Uarte<'a
                         Some(Nrf52UarteStore::ActiveTx(reg)) => Ok(reg.into()),
                         Some(Nrf52UarteStore::ActiveRxTx(reg)) => Ok(reg.into()),
                         _ => {
-                            kernel::debug!("bad5");
                             unimplemented!()
                         }
                     }
@@ -879,7 +881,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Transmit<'a> for Uarte<'a
 
 impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Configure for Uarte<'a, PM> {
     fn configure(&self, params: uart::Parameters) -> Result<(), ErrorCode> {
-        kernel::debug!("confiugre");
         // These could probably be implemented, but are currently ignored, so
         // throw an error.
         if params.stop_bits != uart::StopBits::One {
@@ -903,7 +904,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Configure for Uarte<'a, P
                     Some(Nrf52UarteStore::ActiveRxTx(reg)) => Ok(reg.into()),
                     Some(Nrf52UarteStore::Off(reg)) => Ok(reg.into()),
                     None => {
-                        kernel::debug!("bad");
+                        //                kernel::debug!("bad");
                         Ok(Nrf52UarteStore::Off(Nrf52UarteRegisters::new()))
                     }
                 }
@@ -922,8 +923,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a,
         rx_buf: &'static mut [u8],
         rx_len: usize,
     ) -> Result<(), (ErrorCode, &'static mut [u8])> {
-        kernel::debug!("receive buffer");
-
         if self.rx_buffer.is_some() {
             return Err((ErrorCode::BUSY, rx_buf));
         }
@@ -941,7 +940,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a,
             });
 
         if let Err(ErrorCode::BUSY) = off_err {
-            kernel::debug!("rx fail, [OFF]");
             return Err((ErrorCode::BUSY, rx_buf));
         }
         self.rx_remaining_bytes.set(truncated_length);
@@ -951,7 +949,6 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a,
         let begin_rx = self
             .power_manager
             .use_power_expecting::<_, Active<RxIdle, Any>>(|registers| {
-                kernel::debug!("inside begin rx closure");
                 self.set_rx_dma_pointer_to_buffer(&registers);
 
                 let truncated_uart_max_length = core::cmp::min(truncated_length, 255);
@@ -979,11 +976,9 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a,
                         }
                     }
                 } else {
-                    kernel::debug!("we are here!");
                     Ok(Nrf52UarteStore::Off(Nrf52UarteRegisters::new()))
                 }
             });
-        kernel::debug!("exit receive buffer");
         Ok(())
     }
 
