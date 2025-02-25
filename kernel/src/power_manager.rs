@@ -1,4 +1,6 @@
-use crate::ErrorCode;
+use core::ops::Sub;
+
+use crate::{debug, ErrorCode};
 
 pub struct PowerError<T>(pub T, pub ErrorCode);
 
@@ -17,7 +19,13 @@ pub trait PowerManager<P: Peripheral> {
     {
         // Obtain the stored state, if there is not a value here, we are within another
         // closure and should return an error.
-        let stored_state = self.retrieve_power()?;
+        let stored_state = self.retrieve_power().map_err(|_| ErrorCode::BUSY);
+
+        if stored_state.is_err() {
+            return Err(ErrorCode::BUSY);
+        }
+
+        let stored_state = stored_state.unwrap();
 
         // The stored_state is consumed with the `try_from` operation. For the case of
         // the Any Type, we need to "know" what the original state was. Likewise, we store
@@ -132,4 +140,23 @@ pub trait Merge<T> {
     type Output;
 
     fn merge(self, other: T) -> Self::Output;
+}
+
+pub trait AnySubState: SubState {}
+
+pub trait ConcreteSubState: SubState {}
+
+/// Merge SubStates where A / B belong to different states
+/// e.g. State<A> and State<B>. We are merging these two where
+/// the base is A.
+pub trait MergeSubState<A: SubState, B: SubState> {
+    type Output: SubState;
+}
+
+impl<A, B> MergeSubState<A, B> for A
+where
+    A: SubState + ConcreteSubState,
+    B: SubState + ConcreteSubState,
+{
+    type Output = A;
 }
