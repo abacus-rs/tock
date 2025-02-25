@@ -39,7 +39,7 @@ impl SyncState for Nrf5xTempRegisters<Off> {
 #[repr(C)]
 #[process_register_block(
     peripheral_name = "Nrf5xTemp",
-    register_base_addr = "0x4000C000",
+    register_base_addr = 0x4000C000,
     states = [
         Off => [Reading],
         Reading => [Off],
