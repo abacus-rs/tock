@@ -108,86 +108,86 @@ impl SyncState for Nrf52UarteRegisters<Active<Rx, Tx>> {
 )]
 pub struct UarteRegisters {
     /// This is a doc comment
-    #[RegAttributes([Active(RxIdle, Any)], StateChange(Active(Rx, Any), Task::ENABLE::SET, startrx), TaskStartRx)]
+    #[RegAttributes([Active(RxIdle, Any)], StateChange(Active(Rx, Any), Task::ENABLE::SET, startrx))]
     task_startrx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(Rx, Any)], StateChange(Active(RxIdle, Any), Task::ENABLE::SET, stoprx), TaskStopRx)]
+    #[RegAttributes([Active(Rx, Any)], StateChange(Active(RxIdle, Any), Task::ENABLE::SET, stoprx))]
     task_stoprx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(Any, TxIdle)], StateChange(Active(Any, Tx), Task::ENABLE::SET, starttx), TaskStartTx)]
+    #[RegAttributes([Active(Any, TxIdle)], StateChange(Active(Any, Tx), Task::ENABLE::SET, starttx))]
     task_starttx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(Any, Tx)], StateChange(Active(Any, TxIdle), Task::ENABLE::SET, stoptx), TaskStopTx)]
+    #[RegAttributes([Active(Any, Tx)], StateChange(Active(Any, TxIdle), Task::ENABLE::SET, stoptx))]
     task_stoptx: WriteOnly<u32, Task::Register>,
     _reserved1: [u32; 7],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, FlushRxTask)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     task_flush_rx: WriteOnly<u32, Task::Register>,
     _reserved2: [u32; 52],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, CtsEvent)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     event_cts: ReadWrite<u32, Event::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, NctsEvent)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     event_ncts: ReadWrite<u32, Event::Register>,
     _reserved3: [u32; 2],
     // #[RegInterrupt(Active(Any, Any), Event::READY, Active(RxIdle, Any))]
-    #[RegAttributes([Active(Any, Any)], ReadWrite, EndRxEvent)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     event_endrx: ReadWrite<u32, Event::Register>,
     _reserved4: [u32; 3],
     // #[RegInterrupt(Active(Any, TxIdle), Event::READY)]
-    #[RegAttributes([Active(Any, Any)], ReadWrite, EndTxEvent)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     event_endtx: ReadWrite<u32, Event::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, ErrorEvent)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     event_error: ReadWrite<u32, Event::Register>,
     _reserved6: [u32; 7],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, RxToEvent)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     event_rxto: ReadWrite<u32, Event::Register>,
     _reserved7: [u32; 1],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, RxStartEvent)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     event_rxstarted: ReadWrite<u32, Event::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, TxStartEvent)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     event_txstarted: ReadWrite<u32, Event::Register>,
     _reserved8: [u32; 1],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, TxStopEvent)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     event_txstopped: ReadWrite<u32, Event::Register>,
     _reserved9: [u32; 41],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, ShortsReg)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     shorts: ReadWrite<u32, Shorts::Register>,
     _reserved10: [u32; 64],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, InterruptSet)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     intenset: ReadWrite<u32, Interrupt::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, InterruptClear)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     intenclr: ReadWrite<u32, Interrupt::Register>,
     _reserved11: [u32; 93],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, Error)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     errorsrc: ReadWrite<u32, ErrorSrc::Register>,
     _reserved12: [u32; 31],
     #[RegAttributes([Active(RxIdle, TxIdle)], StateChange(Off, Uart::ENABLE::OFF), Enable)]
     #[RegAttributes([Off], StateChange(Active(RxIdle, TxIdle), Uart::ENABLE::ON, enable), Enable)]
     enable: ReadWrite<u32, Uart::Register>,
     _reserved13: [u32; 1],
-    #[RegAttributes([Off], ReadWrite, PSelRts)]
+    #[RegAttributes([Off], ReadWrite )]
     pselrts: ReadWrite<u32, Psel::Register>,
-    #[RegAttributes([Off], ReadWrite, PSelTxd)]
+    #[RegAttributes([Off], ReadWrite)]
     pseltxd: ReadWrite<u32, Psel::Register>,
-    #[RegAttributes([Off], ReadWrite, PSelCts)]
+    #[RegAttributes([Off], ReadWrite)]
     pselcts: ReadWrite<u32, Psel::Register>,
-    #[RegAttributes([Off], ReadWrite, PSelRxd)]
+    #[RegAttributes([Off], ReadWrite)]
     pselrxd: ReadWrite<u32, Psel::Register>,
     _reserved14: [u32; 3],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, BaudrateReg)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     baudrate: ReadWrite<u32, Baudrate::Register>,
     _reserved15: [u32; 3],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, RxdPtr)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     rxd_ptr: ReadWrite<u32, Pointer::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, RxdMaxCnt)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     rxd_maxcnt: ReadWrite<u32, Counter::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadOnly, RxdAmount)]
+    #[RegAttributes([Active(Any, Any)], ReadOnly)]
     rxd_amount: ReadOnly<u32, Counter::Register>,
     _reserved16: [u32; 1],
-    #[RegAttributes([Active(Any, Any)], ReadWrite, TxdPtr)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     txd_ptr: ReadWrite<u32, Pointer::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadWrite, TxdMaxCnt)]
+    #[RegAttributes([Active(Any, Any)], ReadWrite)]
     txd_maxcnt: ReadWrite<u32, Counter::Register>,
-    #[RegAttributes([Active(Any, Any)], ReadOnly, TxdAmount)]
+    #[RegAttributes([Active(Any, Any)], ReadOnly)]
     txd_amount: ReadOnly<u32, Counter::Register>,
     _reserved17: [u32; 7],
-    #[RegAttributes([Active(Any,Any)], ReadWrite, ConfigReg)]
+    #[RegAttributes([Active(Any,Any)], ReadWrite)]
     config: ReadWrite<u32, Config::Register>,
 }
 

@@ -548,7 +548,6 @@ impl Register {
 struct RegisterAttributes {
     states: Punctuated<State, syn::Token![,]>,
     register_type: RegisterType,
-    type_name: Ident,
 }
 
 impl Parse for RegisterAttributes {
@@ -563,14 +562,10 @@ impl Parse for RegisterAttributes {
         input.parse::<syn::Token![,]>().expect("1");
         let register_type: RegisterType = input.parse().expect("Invalid provided reg type.");
 
-        input.parse::<syn::Token![,]>().expect("2");
-        let type_name: Ident = input.parse().expect("3");
-
         eprintln!("success");
         Ok(RegisterAttributes {
             states,
             register_type,
-            type_name,
         })
     }
 }
@@ -761,8 +756,7 @@ impl MacroInput {
                                     <A1 as MergeSubState<A1, B1>>::Output>: State,
                                 {
                                     type Output = #register_name<#state_ident<
-                                        <A1 as MergeSubState<A1, B1>>::Output,
-                                        B1
+                                        <A1 as MergeSubState<A1, B1>>::Output
                                     >>;
                                     
                                     fn merge(self, _other: #register_name<#state_ident<A1>>) -> Self::Output {
@@ -1063,7 +1057,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         }
     });
 
-    result.extend(parsed_input.generate_disjunctive_states());
+    // result.extend(parsed_input.generate_disjunctive_states());
 
 
     let ast: DeriveInput = syn::parse(item).expect("ast unwrap");
