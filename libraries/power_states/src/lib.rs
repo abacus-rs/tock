@@ -748,6 +748,32 @@ impl MacroInput {
                             } 
                         }
                     );
+                } else if state.substates.len() == 1 {
+                    output.extend(
+                        quote!{
+                            impl <A1, B1> Merge<#register_name<#state_ident<A1>>> for #register_name<#state_ident<B1>> 
+                            where 
+                                #state_ident<A1>: State,
+                                #state_ident<B1>: State,
+                                A1: SubState + MergeSubState<A1, B1>,
+                                B1: SubState + ConcreteSubState,
+                                #state_ident<
+                                    <A1 as MergeSubState<A1, B1>>::Output>: State,
+                                {
+                                    type Output = #register_name<#state_ident<
+                                        <A1 as MergeSubState<A1, B1>>::Output,
+                                        B1
+                                    >>;
+                                    
+                                    fn merge(self, _other: #register_name<#state_ident<A1>>) -> Self::Output {
+                                        unsafe {
+                                            transmute::<#register_name<#state_ident<B1>>, Self::Output>(self) 
+                                        }
+                                    }
+
+                                }
+                        }
+                    )
                 } else if state.substates.len() == 2 {
                     output.extend(
                         quote!{
@@ -1140,15 +1166,12 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
                             
                             let reg_type = format_ident!("{}Register", &reg_attr.register_type.to_ident());
 
-                            let field_attr_clone = field_attr.clone();
-                            output.extend(
-                                quote! {
-                                    #(#field_attr_clone)*
-                            });
                             
                             if first_item {
+                                let field_attr_clone = field_attr.clone();
                                 output.extend(
                                     quote!{
+                                        #(#field_attr_clone)*
                                         pub #field_name: #reg_type<#register_bitwidth, #register_shortname, S>
                                     }
                                 );
