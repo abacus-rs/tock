@@ -259,7 +259,7 @@ impl RegisterType {
 
 impl Parse for RegisterType {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let ident: Ident = input.parse()?;
+        let ident: Ident = input.parse().expect("regtype parse error");
         match ident.to_string().as_str() {
             "ReadOnly" => Ok(RegisterType::ReadOnly),
             "WriteOnly" => Ok(RegisterType::WriteOnly),
@@ -310,10 +310,6 @@ impl Register {
         let register_bitwidth = self.register_bitwidth.clone();
         let register_shortname = self.register_shortname.clone();
         let validstate = self.valid_states.first().expect("generate reg op bindings").form_concrete_state_type();
-
-        if self.valid_states.len() != 1 {
-            panic!("Only one valid state is supported for now.");
-        }
 
         // Determine if this state contains an Any substate.
         let is_anytype = self.valid_states.first().unwrap().substates.iter().any(|substate| substate.to_string() == "Any");
@@ -451,6 +447,8 @@ impl Register {
                 }
             }
             RegisterType::StateChange(state, instruction, state_shortname) => {
+                let mut state_change_output = proc_macro2::TokenStream::new();
+
                 let reg_field_name = self.name.clone();
                 let trait_name = format_ident!("Step{}", state_shortname);
 
@@ -461,87 +459,100 @@ impl Register {
                 if is_anytype {
                     // Create copy of state to change
                     let state = state.clone();
-                    let from_state = self.valid_states.first().expect("state valid").clone();
                     let (to_state, to_state_generics) = map_any(state, "T".to_string());
-                    let (from_state, from_state_generics) = map_any(from_state, "T".to_string());
 
-                    // to_state_generics and from_state_generics are of the form T0: Substate. convert this to be
-                    // T0, T1, ..., T(n)
-                    let to_state_generic_type = format_ident!("{}",to_state_generics.to_string().replace(" : SubState", ""));
-                    let from_state_generic_type = format_ident!("{}",from_state_generics.to_string().replace(" : SubState", ""));
-
-                    eprintln!("to_state_generics: {:?}", to_state_generics.to_string());
-                    eprintln!("to_state_generic_type: {:?}", to_state_generic_type.to_string());
                     
                     // TODO: This is just a marker that we have an issue here. We will need to update 
                     // <impl T: SubState> to have more generics than T / F for more complex peripherals.
-                    quote! {
-                        trait #trait_name<T0: SubState>: Sized
+
+                    state_change_output.extend(quote! {
+                        trait #trait_name<T0: SubState, S>: Sized
                         where 
                             #to_state: State,
-                            #from_state: State,
+                            S: State,
                             #register_name<#to_state>: Reg,
-                            #register_name<#from_state>: Reg
+                            #register_name<S>: Reg
                         {
                             fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
                                 self,
                                 pm: &PM,
-                            ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>>;
-                        }
-
-                        impl <T0: SubState> #trait_name<T0> for #register_name<#from_state> 
-                        where 
-                            #to_state: State,
-                            #from_state: State,
-                            #register_name<#to_state>: Reg,
-                            #register_name<#from_state>: Reg
-                        {
-                            fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
-                                self,
-                                _pm: &PM,
-                            ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>> {
-                                self.#reg_field_name.reg.write(#instruction);
-
-                                unsafe {
-                                    Ok(transmute::<
-                                        #register_name<#from_state>,
-                                        #register_name<#to_state>
-                                    >(self)).into()
-                                }
-                            }
-                        }
-                    }                   
-                } else { 
-                    let from_state = self.valid_states.first().expect("state change unwrap").form_concrete_state_type();
-                    let to_state = state.form_concrete_state_type();
-                    
-                    quote! {
-                        trait #trait_name: Sized {
-                            fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
-                                self,
-                                pm: &PM,
-                            ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>>;
-                        }
-
-                        impl #trait_name for #register_name<#from_state> {
-                            fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
-                                self,
-                                _pm: &PM,
-                            ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>> {
-                                self.#reg_field_name.reg.write(#instruction);
-
-                                unsafe {
-                                    Ok(transmute::<
-                                        #register_name<#from_state>,
-                                        #register_name<#to_state>
-                                    >(self)).into()
-                                }
-                            }
+                            ) -> RegisterResult<#register_name<#to_state>, #register_name<S>>;
                         }
                     }
+                    );
+
+                    for state in &self.valid_states {
+
+                        let (from_state, from_state_generics) = map_any(state.clone(), "T".to_string());
+                    
+                        state_change_output.extend(quote!{
+                            impl <T0: SubState> #trait_name<T0, #from_state> for #register_name<#from_state> 
+                            where 
+                                #to_state: State,
+                                #from_state: State,
+                                #register_name<#to_state>: Reg,
+                                #register_name<#from_state>: Reg
+                            {
+                                fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                                    self,
+                                    _pm: &PM,
+                                ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>> {
+                                    self.#reg_field_name.reg.write(#instruction);
+
+                                    unsafe {
+                                        Ok(transmute::<
+                                            #register_name<#from_state>,
+                                            #register_name<#to_state>
+                                        >(self)).into()
+                                    }
+                                }
+                            }
+                        })
+                    }
+                    
+                    state_change_output
+                } else { 
+                    let to_state = state.form_concrete_state_type();
+                    
+                    state_change_output.extend(quote! {
+                        trait #trait_name<S: State>: Sized 
+                        where 
+                            #register_name<S>: Reg
+                        {
+                            fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                                self,
+                                pm: &PM,
+                            ) -> RegisterResult<#register_name<#to_state>, #register_name<S>>;
+                        }
+                    });
+
+                    for state in &self.valid_states {
+                        let from_state = state.form_concrete_state_type();
+
+                        state_change_output.extend(quote!{
+                            impl #trait_name<#from_state> for #register_name<#from_state> {
+                                fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                                    self,
+                                    _pm: &PM,
+                                ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>> {
+                                    self.#reg_field_name.reg.write(#instruction);
+
+                                    unsafe {
+                                        Ok(transmute::<
+                                            #register_name<#from_state>,
+                                            #register_name<#to_state>
+                                        >(self)).into()
+                                    }
+                                }
+                            }
+                        }
+                    );
                 }
+
+                state_change_output
             }
         }
+    }
     }
 }
 
@@ -552,7 +563,6 @@ struct RegisterAttributes {
 
 impl Parse for RegisterAttributes {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        eprintln!("inside");
         let content;
         let _ = bracketed!(content in input);
         let states: Punctuated<State, syn::Token![,]> = content
@@ -972,22 +982,22 @@ fn add_imports() -> proc_macro2::TokenStream {
 
 impl Parse for MacroInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let _: custom_keywords::peripheral_name = input.parse()?;
-        let _: syn::Token![=] = input.parse()?;
-        let peripheral_name: syn::LitStr = input.parse()?;
-        let _: syn::Token![,] = input.parse()?;
+        let _: custom_keywords::peripheral_name = input.parse().expect("macinput err");
+        let _: syn::Token![=] = input.parse().expect("macinput err");
+        let peripheral_name: syn::LitStr = input.parse().expect("macinput err");        ;
+        let _: syn::Token![,] = input.parse().expect("macinput err");
 
-        let _: custom_keywords::register_base_addr = input.parse()?;
-        let _: syn::Token![=] = input.parse()?;
+        let _: custom_keywords::register_base_addr = input.parse().expect("macinput err");
+        let _: syn::Token![=] = input.parse().expect("macinput err");
         let base_addr: syn::LitInt  = input.parse().expect("error with base addr");
-        let _: syn::Token![,] = input.parse()?;
+        let _: syn::Token![,] = input.parse().expect("macinput err");
 
-        let _: custom_keywords::states = input.parse()?;
-        let _: syn::Token![=] = input.parse()?;
+        let _: custom_keywords::states = input.parse().expect("macinput err");
+        let _: syn::Token![=] = input.parse().expect("macinput err");
         let states_content;
         let _: syn::token::Bracket = bracketed!(states_content in input);
         let states: Punctuated<State, syn::Token![,]> =
-            states_content.parse_terminated(State::parse, syn::Token![,])?;
+            states_content.parse_terminated(State::parse, syn::Token![,]).expect("macinput err");
 
         Ok(MacroInput {
             peripheral_name: peripheral_name.value(),
@@ -1196,6 +1206,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
         }
     }
+
 });
 
     let struct_output = quote! {
