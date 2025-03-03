@@ -7,6 +7,8 @@ use nrf52::{
     chip::Nrf52DefaultPeripherals, temperature::Nrf5xTempPeripheral, uart::Nrf52UartePeripheral,
 };
 
+use crate::ieee802154_radio::Nrf52RadioPeripheral;
+
 /// This struct, when initialized, instantiates all peripheral drivers for the nrf52840.
 /// If a board wishes to use only a subset of these peripherals, this
 /// should not be used or imported, and a modified version should be
@@ -14,17 +16,21 @@ use nrf52::{
 //create all base nrf52 peripherals
 pub struct Nrf52840DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTempPeripheral> + PowerManager<Nrf52UartePeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral>
+        + PowerManager<Nrf52UartePeripheral>
+        + PowerManager<Nrf52RadioPeripheral>,
 {
     pub nrf52: Nrf52DefaultPeripherals<'a, PM>,
-    pub ieee802154_radio: crate::ieee802154_radio::Radio<'a>,
+    pub ieee802154_radio: crate::ieee802154_radio::Radio<'a, PM>,
     pub usbd: crate::usbd::Usbd<'a>,
     pub gpio_port: crate::gpio::Port<'a, { crate::gpio::NUM_PINS }>,
 }
 
 impl<'a, PM> Nrf52840DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTempPeripheral> + PowerManager<Nrf52UartePeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral>
+        + PowerManager<Nrf52UartePeripheral>
+        + PowerManager<Nrf52RadioPeripheral>,
 {
     pub unsafe fn new(
         ieee802154_radio_ack_buf: &'static mut [u8; crate::ieee802154_radio::ACK_BUF_SIZE],
@@ -32,7 +38,7 @@ where
     ) -> Self {
         Self {
             nrf52: Nrf52DefaultPeripherals::new(pm),
-            ieee802154_radio: crate::ieee802154_radio::Radio::new(ieee802154_radio_ack_buf),
+            ieee802154_radio: crate::ieee802154_radio::Radio::new(ieee802154_radio_ack_buf, pm),
             usbd: crate::usbd::Usbd::new(),
             gpio_port: crate::gpio::nrf52840_gpio_create(),
         }
@@ -49,7 +55,9 @@ where
 }
 impl<'a, PM> kernel::platform::chip::InterruptService for Nrf52840DefaultPeripherals<'a, PM>
 where
-    PM: PowerManager<Nrf5xTempPeripheral> + PowerManager<Nrf52UartePeripheral>,
+    PM: PowerManager<Nrf5xTempPeripheral>
+        + PowerManager<Nrf52UartePeripheral>
+        + PowerManager<Nrf52RadioPeripheral>,
 {
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
         match interrupt {
