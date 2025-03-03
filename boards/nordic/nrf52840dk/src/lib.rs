@@ -190,12 +190,12 @@ type TemperatureDriver = components::temperature::TemperatureComponentType<
 
 // IEEE 802.15.4
 type Ieee802154MacDevice = components::ieee802154::Ieee802154ComponentMacDeviceType<
-    nrf52840::ieee802154_radio::Radio<'static>,
+    nrf52840::ieee802154_radio::Radio<'static, Nrf52840PowerManager>,
     nrf52840::aes::AesECB<'static>,
 >;
 /// Userspace 802.15.4 driver with in-kernel packet framing and MAC layer.
 pub type Ieee802154Driver = components::ieee802154::Ieee802154ComponentType<
-    nrf52840::ieee802154_radio::Radio<'static>,
+    nrf52840::ieee802154_radio::Radio<'static, Nrf52840PowerManager>,
     nrf52840::aes::AesECB<'static>,
 >;
 
@@ -347,7 +347,7 @@ pub unsafe fn ieee802154_udp(
         device_id,
     )
     .finalize(components::ieee802154_component_static!(
-        nrf52840::ieee802154_radio::Radio,
+        nrf52840::ieee802154_radio::Radio<'static, Nrf52840PowerManager>,
         nrf52840::aes::AesECB<'static>
     ));
 
