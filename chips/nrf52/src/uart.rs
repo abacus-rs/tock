@@ -157,8 +157,8 @@ pub struct UarteRegisters {
     #[RegAttributes([Active(Any, Any)], ReadWrite)]
     errorsrc: ReadWrite<u32, ErrorSrc::Register>,
     _reserved12: [u32; 31],
-    #[RegAttributes([Active(RxIdle, TxIdle)], StateChange(Off, Uart::ENABLE::OFF), Enable)]
-    #[RegAttributes([Off], StateChange(Active(RxIdle, TxIdle), Uart::ENABLE::ON, enable), Enable)]
+    #[RegAttributes([Active(RxIdle, TxIdle)], StateChange(Off, Uart::ENABLE::OFF))]
+    #[RegAttributes([Off], StateChange(Active(RxIdle, TxIdle), Uart::ENABLE::ON, enable))]
     enable: ReadWrite<u32, Uart::Register>,
     _reserved13: [u32; 1],
     #[RegAttributes([Off], ReadWrite )]
