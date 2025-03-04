@@ -288,7 +288,6 @@ impl Parse for RegisterType {
 
             }
             x => {
-                eprintln!("{:?}", x);
                 Err(syn::Error::new(ident.span(), "Unknown register type"))
             }
         }
@@ -624,7 +623,6 @@ impl Parse for RegisterAttributes {
         input.parse::<syn::Token![,]>().expect("1");
         let register_type: RegisterType = input.parse().expect("Invalid provided reg type.");
 
-        eprintln!("success");
         Ok(RegisterAttributes {
             states,
             register_type,
@@ -1071,8 +1069,6 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     let mut result = add_imports();
 
-    eprintln!("register: {:?}", register);
-
     let base_addr = parsed_input.base_addr.clone(); 
     // IN REGARDS TO THE NEW METHOD BELOW:
     // The existence of this method destroys all guarantees. We need this
@@ -1167,11 +1163,8 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
             let reg_attr_vec = field.attrs.iter().map(|attr| {
                 // for each attribute in field attrs, leave doc macro comments
                 // and remove RegAttributes.
-                eprintln!("here");
-                eprintln!("attr: {:?}", attr.path());
                 if attr.path().is_ident("RegAttributes") {
                     if let Ok(val) = attr.parse_args::<RegisterAttributes>() {
-                        eprintln!("returning now");
                         return Some(val);
                     } else {
                         panic!("sad");
@@ -1180,8 +1173,6 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
                 }
                 None
             }).collect::<Vec<_>>();
-
-            eprintln!("end attr");
 
             // To properly form the register bindings, we must also take information
             // from the provided type.
@@ -1236,22 +1227,17 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
                             }
                         }
                     }                    
-                    eprintln!("here0 {:?}", field_name);
                     output
                 } else {
-                    eprintln!("here1");
                     panic!("unreachable a")
                 }
             } else {
-                    eprintln!("here2");
                 panic!("unreachable b");
             }
         } else {
-            eprintln!("here3");
             panic!("unreachable c");
         }
     } else {
-        eprintln!("here4 {:?}", field_name);
         quote! {
             #(#field_attr)*
             pub #field_name: #field_type
