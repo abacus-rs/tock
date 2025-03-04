@@ -567,8 +567,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                                 return reg.into_off(self.power_manager).into_closure_return();
                             }
                             _ => {
-                                kernel::debug!("bad3");
-                                return Ok(Nrf52UarteStore::Off(Nrf52UarteRegisters::new()));
+                                unreachable!()
                             }
                         }
                     } else {
@@ -598,8 +597,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
                                     return reg.into_off(self.power_manager).into_closure_return();
                                 }
                                 _ => {
-                                    kernel::debug!("bad4");
-                                    return Ok(Nrf52UarteStore::Off(Nrf52UarteRegisters::new()));
+                                    unreachable!()
                                 }
                             }
                         } else {
@@ -619,35 +617,14 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
 
                                 // Determine if Any is Tx or TxIdle -- for something like this if one of the substates
                                 // is storable, we know the whole type is storable so we can avoid these matches.
-                                match self.power_manager.into_state_enum(reg) {
-                                    Some(Nrf52UarteStore::ActiveRx(reg)) => Ok(reg.into()),
-                                    Some(Nrf52UarteStore::ActiveRxTx(reg)) => Ok(reg.into()),
-                                    _ => {
-                                        kernel::debug!("bad7");
-                                        return Ok(
-                                            Nrf52UarteStore::Off(Nrf52UarteRegisters::new()),
-                                        );
-                                    }
-                                }
+                                Ok(self.power_manager.into_state_enum(reg).unwrap())
                             } else {
                                 unimplemented!()
                             }
                         }
                     }
                 } else {
-                    match self.power_manager.into_state_enum(registers) {
-                        Some(Nrf52UarteStore::ActiveRx(reg)) => Ok(reg.into()),
-                        Some(Nrf52UarteStore::ActiveRxTx(reg)) => Ok(reg.into()),
-                        Some(Nrf52UarteStore::ActiveIdle(reg)) => Ok(reg.into()),
-                        Some(Nrf52UarteStore::Off(reg)) => Ok(reg.into()),
-                        Some(Nrf52UarteStore::ActiveTx(reg)) => Ok(reg.into()),
-
-                        _ => {
-                            unimplemented!();
-                            kernel::debug!("bad8");
-                            return Ok(Nrf52UarteStore::Off(Nrf52UarteRegisters::new()));
-                        }
-                    }
+                    Ok(self.power_manager.into_state_enum(registers).unwrap())
                 }
             });
 
@@ -861,7 +838,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Transmit<'a> for Uarte<'a
                         Some(Nrf52UarteStore::ActiveTx(reg)) => Ok(reg.into()),
                         Some(Nrf52UarteStore::ActiveRxTx(reg)) => Ok(reg.into()),
                         _ => {
-                            unimplemented!()
+                            unreachable!()
                         }
                     }
                 });
@@ -897,17 +874,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Configure for Uarte<'a, P
             .use_power_expecting::<_, Active<Any, Any>>(|registers| {
                 self.set_baud_rate(params.baud_rate, &registers);
 
-                match self.power_manager.into_state_enum(registers) {
-                    Some(Nrf52UarteStore::ActiveIdle(reg)) => Ok(reg.into()),
-                    Some(Nrf52UarteStore::ActiveRx(reg)) => Ok(reg.into()),
-                    Some(Nrf52UarteStore::ActiveTx(reg)) => Ok(reg.into()),
-                    Some(Nrf52UarteStore::ActiveRxTx(reg)) => Ok(reg.into()),
-                    Some(Nrf52UarteStore::Off(reg)) => Ok(reg.into()),
-                    None => {
-                        //                kernel::debug!("bad");
-                        Ok(Nrf52UarteStore::Off(Nrf52UarteRegisters::new()))
-                    }
-                }
+                Ok(self.power_manager.into_state_enum(registers).unwrap())
             })
     }
 }
@@ -996,7 +963,8 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a,
 
             // Technically, we cannot be sure that we are still in the Rx state
             // here?
-            self.power_manager
+            let _ = self
+                .power_manager
                 .use_power_expecting::<_, Active<Rx, Any>>(|registers| {
                     let stop_rx_reg = registers.into_stoprx(self.power_manager);
 
