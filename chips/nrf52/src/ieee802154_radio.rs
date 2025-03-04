@@ -368,6 +368,7 @@ struct RadioRegisters {
     _reserved17: [u32; 611],
     /// Peripheral power control
     /// - Address: 0xFFC - 0x1000
+    #[RegAttributes([On(Any), Off], StateChangeRW)]
     #[RegAttributes([Off], StateChange(On(Disabled), Task::ENABLE::SET, power_on))]
     #[RegAttributes([On(Disabled)], StateChange(Off, Task::ENABLE::CLEAR))]
     power: ReadWrite<u32, Task::Register>,
@@ -829,12 +830,6 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
         } else {
             unimplemented!()
         }
-    }
-
-    fn radio_is_on(&self) -> bool {
-        // todo: need to add state change + config reg
-        unimplemented!();
-        // self.registers.power.is_set(Task::ENABLE)
     }
 
     fn set_dma_ptr<S>(
@@ -1466,7 +1461,15 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> kernel::hil::radio::RadioConfig
     }
 
     fn is_on(&self) -> bool {
-        self.radio_is_on()
+        let mut is_on = false;
+
+        let try_on_state = self.power_manager.use_power_expecting::<_, On<Any>>(|registers| {
+            is_on = registers.power.is_set(Task::ENABLE);
+            Ok(self.power_manager.into_state_enum(registers).unwrap())
+        });
+
+        true
+            
     }
 
     fn busy(&self) -> bool {
@@ -1661,7 +1664,7 @@ impl<PM: PowerManager<Nrf52RadioPeripheral>> DeferredCallClient for Radio<'_, PM
             }
             DeferredOperation::PowerClientCallback => {
                 self.power_client.map(|client| {
-                    client.changed(self.radio_is_on());
+                    client.changed(self.is_on());
                 });
             }
         });

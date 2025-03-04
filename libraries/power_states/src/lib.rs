@@ -244,6 +244,7 @@ enum RegisterType {
     WriteOnly,
     ReadWrite,
     StateChange(State, syn::Path, Ident),
+    StateChangeRW,
 }
 
 impl RegisterType {
@@ -253,6 +254,7 @@ impl RegisterType {
             RegisterType::WriteOnly => format_ident!("WriteOnly"),
             RegisterType::ReadWrite => format_ident!("ReadWrite"),
             RegisterType::StateChange(_, _, _) => format_ident!("StateChange"),
+            RegisterType::StateChangeRW => format_ident!("StateChange")
         }
     }
 }
@@ -264,6 +266,7 @@ impl Parse for RegisterType {
             "ReadOnly" => Ok(RegisterType::ReadOnly),
             "WriteOnly" => Ok(RegisterType::WriteOnly),
             "ReadWrite" => Ok(RegisterType::ReadWrite),
+            "StateChangeRW" => Ok(RegisterType::StateChangeRW),
             "StateChange" => {
                 let content;
                 let _: syn::token::Paren = syn::parenthesized!(content in input);
@@ -349,7 +352,9 @@ impl Register {
             (state.form_concrete_state_type(), generic_tokens)
 
         };
-        
+
+        // FIXME: This only accounts for the first state. We need to account for all states.in the 
+        // valid states. StateChangeRegister currently does this, but all register types should.  
         match &self.register_type {
             RegisterType::ReadOnly => {
                 if is_anytype {
@@ -441,6 +446,53 @@ impl Register {
 
                             pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
                                 self.reg.write(value)
+                            }
+                            pub fn is_set(&self, field: Field<#register_bitwidth, #register_shortname>) -> bool {
+                                self.reg.is_set(field)
+                            }
+                        }
+                    }
+                }
+            }
+            RegisterType::StateChangeRW => {
+                if is_anytype {
+                    let (state_ident, generic_tokens) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
+                    quote! {
+                        impl <#generic_tokens> StateChangeRegister<#register_bitwidth, #register_shortname, #state_ident>
+                        where 
+                            #state_ident: State
+                        {
+                            pub fn get(&self) -> #register_bitwidth {
+                                self.reg.get()
+                            }
+                            pub fn set(&self, value: #register_bitwidth) {
+                                self.reg.set(value)
+                            }
+
+                            pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                self.reg.write(value)
+                            }
+
+                            pub fn is_set(&self, field: Field<#register_bitwidth, #register_shortname>) -> bool {
+                                self.reg.is_set(field)
+                            }
+                        }
+                    }
+                } else {
+                    quote! {
+                        impl StateChangeRegister<#register_bitwidth, #register_shortname, #validstate> {
+                            pub fn get(&self) -> #register_bitwidth {
+                                self.reg.get()
+                            }
+                            pub fn set(&self, value: #register_bitwidth) {
+                                self.reg.set(value)
+                            }
+
+                            pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                self.reg.write(value)
+                            }
+                            pub fn is_set(&self, field: Field<#register_bitwidth, #register_shortname>) -> bool {
+                                self.reg.is_set(field)
                             }
                         }
                     }
@@ -1255,7 +1307,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         }
 
         struct StateChangeRegister<T: UIntLike, R: RegisterLongName, S: State> {
-            reg: WriteOnly<T, R>,
+            reg: ReadWrite<T, R>,
             associated_state: PhantomData<S>,
         }
 
