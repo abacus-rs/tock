@@ -341,14 +341,20 @@ impl Register {
             // count
             let generic_params = (0..count).map(|index| {
                 let generic = format_ident!("{}{}", generic_seed, index.to_string());
-                form_generic(generic)
+                generic
             });
+
+            let generic_params_constrained: Vec<_> = (0..count).map(|index| {
+                let generic = format_ident!("{}{}", generic_seed, index.to_string());
+                form_generic(generic)
+            }).collect();
 
             let generic_tokens = quote! {
                 #(#generic_params),*
             };
 
-            (state.form_concrete_state_type(), generic_tokens)
+
+            (state.form_concrete_state_type(), generic_tokens, generic_params_constrained)
 
         };
 
@@ -357,11 +363,12 @@ impl Register {
         match &self.register_type {
             RegisterType::ReadOnly => {
                 if is_anytype {
-                    let (state_ident, generic_tokens) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"}); 
+                    let (state_ident, generic_tokens, generic_tokens_constrained) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"}); 
                     quote! {
                         impl <#generic_tokens> ReadOnlyRegister<#register_bitwidth, #register_shortname, #state_ident>
                         where 
-                            #state_ident: State
+                            #state_ident: State,
+                            #(#generic_tokens_constrained),*
                         {
                             pub fn get(&self) -> #register_bitwidth {
                                 self.reg.get()
@@ -380,11 +387,12 @@ impl Register {
             }
             RegisterType::WriteOnly => {
                 if is_anytype {
-                   let (state_ident, generic_tokens) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
+                   let (state_ident, generic_tokens, generic_tokens_constrained) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
                     quote! {
                         impl <#generic_tokens> WriteOnlyRegister<#register_bitwidth, #register_shortname, #state_ident>
                         where 
-                            #state_ident: State
+                            #state_ident: State,
+                            #(#generic_tokens_constrained),*
                         {
                             pub fn set(&self, value: #register_bitwidth) {
                                 self.reg.set(value)
@@ -411,11 +419,12 @@ impl Register {
             }
             RegisterType::ReadWrite => {
                 if is_anytype {
-                    let (state_ident, generic_tokens) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
+                    let (state_ident, generic_tokens, generic_tokens_constrained) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
                     quote! {
                         impl <#generic_tokens> ReadWriteRegister<#register_bitwidth, #register_shortname, #state_ident>
                         where 
-                            #state_ident: State
+                            #state_ident: State,
+                            #(#generic_tokens_constrained),*
                         {
                             pub fn get(&self) -> #register_bitwidth {
                                 self.reg.get()
@@ -455,11 +464,12 @@ impl Register {
             }
             RegisterType::StateChangeRW => {
                 if is_anytype {
-                    let (state_ident, generic_tokens) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
+                    let (state_ident, generic_tokens, generic_tokens_constrained) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
                     quote! {
                         impl <#generic_tokens> StateChangeRegister<#register_bitwidth, #register_shortname, #state_ident>
                         where 
-                            #state_ident: State
+                            #state_ident: State,
+                            #(#generic_tokens_constrained),*
                         {
                             pub fn get(&self) -> #register_bitwidth {
                                 self.reg.get()
@@ -510,19 +520,26 @@ impl Register {
                 if is_anytype {
                     // Create copy of state to change
                     let state = state.clone();
-                    let (to_state, to_state_generics) = map_any(state, "T".to_string());
+                    let (to_state, to_state_generics, to_state_generics_constrained) = map_any(state, "T".to_string());
 
                     
                     // TODO: This is just a marker that we have an issue here. We will need to update 
                     // <impl T: SubState> to have more generics than T / F for more complex peripherals.
 
+                    let carrot_block = if to_state_generics_constrained.is_empty() {
+                        quote! {S}
+                    } else {
+                        quote! {#(#to_state_generics_constrained)*, S}
+                    };
+
                     state_change_output.extend(quote! {
-                        trait #trait_name<T0: SubState, S>: Sized
+                        trait #trait_name<#carrot_block>: Sized
                         where 
                             #to_state: State,
                             S: State,
                             #register_name<#to_state>: Reg,
-                            #register_name<S>: Reg
+                            #register_name<S>: Reg,
+                            #(#to_state_generics_constrained),*
                         {
                             fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
                                 self,
@@ -534,15 +551,24 @@ impl Register {
 
                     for state in &self.valid_states {
 
-                        let (from_state, from_state_generics) = map_any(state.clone(), "T".to_string());
-                    
+                        let (from_state, from_state_generics, from_state_generics_constrained) = map_any(state.clone(), "T".to_string());
+
+                        let constraints = merge_constraint_vec(to_state_generics_constrained.clone(), from_state_generics_constrained); 
+
+                        let carrot_block = if to_state_generics.to_string() == "" {
+                            quote!{#from_state}
+                        } else {
+                            quote!{#to_state_generics, #from_state}
+                        };
+
                         state_change_output.extend(quote!{
-                            impl <T0: SubState> #trait_name<T0, #from_state> for #register_name<#from_state> 
+                            impl <#(#constraints),*> #trait_name<#carrot_block> for #register_name<#from_state> 
                             where 
                                 #to_state: State,
                                 #from_state: State,
                                 #register_name<#to_state>: Reg,
-                                #register_name<#from_state>: Reg
+                                #register_name<#from_state>: Reg,
+                                #(#constraints),*
                             {
                                 fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
                                     self,
@@ -1396,4 +1422,20 @@ pub fn entry_point(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }.into()
 
+}
+
+fn merge_constraint_vec(vec1: Vec<proc_macro2::TokenStream>, vec2: Vec<proc_macro2::TokenStream>) -> Vec<proc_macro2::TokenStream> {
+    let mut added: HashSet<_> = HashSet::new();
+    for item in vec1.clone() {
+        added.insert(item.clone().to_string());
+    }
+
+    let mut output = vec1.clone();
+    for item in vec2 {
+        if !added.contains(item.clone().to_string().as_str()) {
+            output.push(item.clone());
+            added.insert(item.clone().to_string());
+        }
+    }
+    output
 }
