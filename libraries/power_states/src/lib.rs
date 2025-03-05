@@ -373,6 +373,10 @@ impl Register {
                             pub fn get(&self) -> #register_bitwidth {
                                 self.reg.get()
                             }
+
+                            pub fn read(&self, field: Field<#register_bitwidth, #register_shortname>) -> #register_bitwidth {
+                                self.reg.read(field)
+                            }
                         }
                     }
                 } else {
@@ -380,6 +384,10 @@ impl Register {
                         impl ReadOnlyRegister<#register_bitwidth, #register_shortname, #validstate> {
                             pub fn get(&self) -> #register_bitwidth {
                                 self.reg.get()
+                            }
+                            
+                            pub fn read(&self, field: Field<#register_bitwidth, #register_shortname>) -> #register_bitwidth {
+                                self.reg.read(field)
                             }
                         }
                     }
@@ -413,6 +421,12 @@ impl Register {
                             pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
                                 self.reg.write(value)
                             }
+                            
+                            pub fn modify_no_read(&self, 
+                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>, 
+                                value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                    self.reg.modify_no_read(original, value)
+                            }
                         }
                     }
                 }
@@ -440,6 +454,20 @@ impl Register {
                             pub fn is_set(&self, field: Field<#register_bitwidth, #register_shortname>) -> bool {
                                 self.reg.is_set(field)
                             }
+                            
+                            pub fn modify(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                self.reg.modify(value)
+                            }
+                            
+                            pub fn modify_no_read(&self, 
+                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>, 
+                                value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                    self.reg.modify_no_read(original, value)
+                            }
+                            
+                            pub fn read(&self, field: Field<#register_bitwidth, #register_shortname>) -> #register_bitwidth {
+                                self.reg.read(field)
+                            }
                         }
                     }
                 } else {
@@ -457,6 +485,20 @@ impl Register {
                             }
                             pub fn is_set(&self, field: Field<#register_bitwidth, #register_shortname>) -> bool {
                                 self.reg.is_set(field)
+                            }
+
+                            pub fn modify(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                self.reg.modify(value)
+                            }
+                            
+                            pub fn modify_no_read(&self, 
+                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>, 
+                                value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                    self.reg.modify_no_read(original, value)
+                            }
+                            
+                            pub fn read(&self, field: Field<#register_bitwidth, #register_shortname>) -> #register_bitwidth {
+                                self.reg.read(field)
                             }
                         }
                     }
@@ -485,6 +527,20 @@ impl Register {
                             pub fn is_set(&self, field: Field<#register_bitwidth, #register_shortname>) -> bool {
                                 self.reg.is_set(field)
                             }
+                            
+                            pub fn modify(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                self.reg.modify(value)
+                            }
+                            
+                            pub fn modify_no_read(&self, 
+                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>, 
+                                value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                    self.reg.modify_no_read(original, value)
+                            }
+                            
+                            pub fn read(&self, field: Field<#register_bitwidth, #register_shortname>) -> #register_bitwidth {
+                                self.reg.read(field)
+                            }
                         }
                     }
                 } else {
@@ -502,6 +558,20 @@ impl Register {
                             }
                             pub fn is_set(&self, field: Field<#register_bitwidth, #register_shortname>) -> bool {
                                 self.reg.is_set(field)
+                            }
+
+                            pub fn modify(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                self.reg.modify(value)
+                            }
+                            
+                            pub fn modify_no_read(&self, 
+                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>, 
+                                value: FieldValue<#register_bitwidth, #register_shortname>) {
+                                    self.reg.modify_no_read(original, value)
+                            }
+                            
+                            pub fn read(&self, field: Field<#register_bitwidth, #register_shortname>) -> #register_bitwidth {
+                                self.reg.read(field)
                             }
                         }
                     }
@@ -1052,7 +1122,7 @@ fn add_imports() -> proc_macro2::TokenStream {
         use core::marker::PhantomData;
         use core::mem::transmute;
         use core::ops::Deref;
-        use kernel::utilities::registers::{FieldValue, UIntLike, RegisterLongName, Field};
+        use kernel::utilities::registers::{FieldValue, UIntLike, RegisterLongName, Field, LocalRegisterCopy, interfaces::ReadWriteable};
     )
 }
 
