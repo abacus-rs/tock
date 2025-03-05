@@ -46,7 +46,7 @@ impl SyncState for Nrf52UarteRegisters<Off> {
     }
 }
 
-impl SyncState for Nrf52UarteRegisters<Active<Rx, TxIdle>> {
+impl SyncState for Nrf52UarteRegisters<Active<Transient, TxIdle>> {
     type SyncStateEnum = Nrf52UarteStore;
     fn sync_state(self) -> Self::SyncStateEnum {
         // Check if Rx finished interrupt fired.
@@ -58,7 +58,7 @@ impl SyncState for Nrf52UarteRegisters<Active<Rx, TxIdle>> {
     }
 }
 
-impl SyncState for Nrf52UarteRegisters<Active<RxIdle, Tx>> {
+impl SyncState for Nrf52UarteRegisters<Active<RxIdle, Transient>> {
     type SyncStateEnum = Nrf52UarteStore;
     fn sync_state(self) -> Self::SyncStateEnum {
         // Check if Tx finished interrupt fired.
@@ -70,12 +70,13 @@ impl SyncState for Nrf52UarteRegisters<Active<RxIdle, Tx>> {
     }
 }
 
-impl SyncState for Nrf52UarteRegisters<Active<Rx, Tx>> {
+impl SyncState for Nrf52UarteRegisters<Active<Transient, Transient>> {
     type SyncStateEnum = Nrf52UarteStore;
     fn sync_state(self) -> Self::SyncStateEnum {
         // Check if Rx finished interrupt fired.
         if self.event_endrx.is_set(Event::READY) {
-            let reg = unsafe { transmute::<_, Nrf52UarteRegisters<Active<RxIdle, Tx>>>(self) };
+            let reg =
+                unsafe { transmute::<_, Nrf52UarteRegisters<Active<RxIdle, Transient>>>(self) };
 
             if reg.event_endtx.is_set(Event::READY) {
                 unsafe { transmute::<_, Nrf52UarteRegisters<Active<RxIdle, TxIdle>>>(reg).into() }
@@ -84,7 +85,8 @@ impl SyncState for Nrf52UarteRegisters<Active<Rx, Tx>> {
             }
         } else {
             if self.event_endtx.is_set(Event::READY) {
-                unsafe { transmute::<_, Nrf52UarteRegisters<Active<Rx, TxIdle>>>(self) }.into()
+                unsafe { transmute::<_, Nrf52UarteRegisters<Active<Transient, TxIdle>>>(self) }
+                    .into()
             } else {
                 self.into()
             }
@@ -100,21 +102,21 @@ impl SyncState for Nrf52UarteRegisters<Active<Rx, Tx>> {
     register_base_addr = 0x40002000,
     states = [
         Off => [Active(RxIdle, TxIdle)],
-        Active(RxIdle, TxIdle) => [Active(RxIdle, Tx), Active(Rx, TxIdle), Off] {ActiveIdle},
-        Active(Rx, TxIdle) => [Active(RxIdle, TxIdle), Active(Rx, Tx)] {ActiveRx},
-        Active(RxIdle, Tx) => [Active(RxIdle, TxIdle), Active(Rx, Tx)] {ActiveTx},
-        Active(Rx, Tx) => [Active(Rx, TxIdle), Active(RxIdle, Tx)] {ActiveRxTx},
+        Active(RxIdle, TxIdle) => [Active(RxIdle, Transient), Active(Transient, TxIdle), Off] {ActiveIdle},
+        Active(Transient, TxIdle) => [Active(RxIdle, TxIdle), Active(Transient, Transient)] {ActiveRx},
+        Active(RxIdle, Transient) => [Active(RxIdle, TxIdle), Active(Transient, Transient)] {ActiveTx},
+        Active(Transient, Transient) => [Active(Transient, TxIdle), Active(RxIdle, Transient)] {ActiveRxTx},
     ]
 )]
 pub struct UarteRegisters {
     /// This is a doc comment
-    #[RegAttributes([Active(RxIdle, Any)], StateChange(Active(Rx, Any), Task::ENABLE::SET, startrx))]
+    #[RegAttributes([Active(RxIdle, Any)], StateChange(Active(Transient, Any), Task::ENABLE::SET, startrx))]
     task_startrx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(Rx, Any)], StateChange(Active(RxIdle, Any), Task::ENABLE::SET, stoprx))]
+    #[RegAttributes([Active(Any, Any)], StateChange(Active(RxIdle, Any), Task::ENABLE::SET, stoprx))]
     task_stoprx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(Any, TxIdle)], StateChange(Active(Any, Tx), Task::ENABLE::SET, starttx))]
+    #[RegAttributes([Active(Any, TxIdle)], StateChange(Active(Any, Transient), Task::ENABLE::SET, starttx))]
     task_starttx: WriteOnly<u32, Task::Register>,
-    #[RegAttributes([Active(Any, Tx)], StateChange(Active(Any, TxIdle), Task::ENABLE::SET, stoptx))]
+    #[RegAttributes([Active(Any, Any)], StateChange(Active(Any, TxIdle), Task::ENABLE::SET, stoptx))]
     task_stoptx: WriteOnly<u32, Task::Register>,
     _reserved1: [u32; 7],
     #[RegAttributes([Active(Any, Any)], ReadWrite)]
@@ -766,13 +768,13 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> Uarte<'a, PM> {
         buf: &'static mut [u8],
         tx_len: usize,
         registers: Nrf52UarteRegisters<Active<T, TxIdle>>,
-    ) -> Nrf52UarteRegisters<Active<T, Tx>>
+    ) -> Nrf52UarteRegisters<Active<T, Transient>>
     where
         T: SubState,
         Active<T, TxIdle>: State,
         Nrf52UarteRegisters<Active<T, TxIdle>>: Reg,
-        Nrf52UarteRegisters<Active<T, Tx>>: Reg,
-        Active<T, Tx>: State,
+        Nrf52UarteRegisters<Active<T, Transient>>: Reg,
+        Active<T, Transient>: State,
     {
         self.tx_remaining_bytes.set(tx_len);
         self.tx_len.set(tx_len);
@@ -965,7 +967,7 @@ impl<'a, PM: PowerManager<Nrf52UartePeripheral>> uart::Receive<'a> for Uarte<'a,
             // here?
             let _ = self
                 .power_manager
-                .use_power_expecting::<_, Active<Rx, Any>>(|registers| {
+                .use_power_expecting::<_, Active<Any, Any>>(|registers| {
                     let stop_rx_reg = registers.into_stoprx(self.power_manager);
 
                     if let RegisterResult::Ok(reg) = stop_rx_reg {
