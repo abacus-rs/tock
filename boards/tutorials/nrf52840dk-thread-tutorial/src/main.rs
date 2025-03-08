@@ -15,8 +15,10 @@ use core::ptr::addr_of_mut;
 use kernel::component::Component;
 use kernel::debug;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
+use kernel::power_manager::PowerManager;
 use kernel::{capabilities, create_capability};
 use nrf52840::gpio::Pin;
+use nrf52840::power_manager::Nrf52840PowerManager;
 use nrf52840dk_lib::{self, PROCESSES};
 
 type ScreenDriver = components::screen::ScreenComponentType;
@@ -26,8 +28,9 @@ type ScreenDriver = components::screen::ScreenComponentType;
 const FAULT_RESPONSE: capsules_system::process_policies::PanicFaultPolicy =
     capsules_system::process_policies::PanicFaultPolicy {};
 
-type Ieee802154RawDriver =
-    components::ieee802154::Ieee802154RawComponentType<nrf52840::ieee802154_radio::Radio<'static>>;
+type Ieee802154RawDriver = components::ieee802154::Ieee802154RawComponentType<
+    nrf52840::ieee802154_radio::Radio<'static, Nrf52840PowerManager>,
+>;
 
 struct Platform {
     base: nrf52840dk_lib::Platform,
@@ -114,7 +117,7 @@ pub unsafe fn main() {
         &nrf52840_peripherals.ieee802154_radio,
     )
     .finalize(components::ieee802154_raw_component_static!(
-        nrf52840::ieee802154_radio::Radio,
+        nrf52840::ieee802154_radio::Radio<Nrf52840PowerManager>,
     ));
 
     //--------------------------------------------------------------------------
