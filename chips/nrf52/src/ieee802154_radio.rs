@@ -116,12 +116,69 @@ RXDISABLE   The radio is disabling the receiver
 TXDISABLE   The radio is disabling the transmitter
 */
 
-impl<S: State> SyncState for Nrf52RadioRegisters<S> {
+impl SyncState for Nrf52RadioRegisters<Off> {
     type SyncStateEnum = Nrf52RadioStore;
 
     fn sync_state(self) -> Self::SyncStateEnum {
-        // we will use the state register for this.
-        unimplemented!()
+        self.into()
+    }
+}
+
+impl SyncState for Nrf52RadioRegisters<On<Disabled>> {
+    type SyncStateEnum = Nrf52RadioStore;
+
+    fn sync_state(self) -> Self::SyncStateEnum {
+        self.into()
+    }
+}
+
+impl SyncState for Nrf52RadioRegisters<On<RxIdle>> {
+    type SyncStateEnum = Nrf52RadioStore;
+
+    fn sync_state(self) -> Self::SyncStateEnum {
+        self.into()
+    }
+}
+
+impl SyncState for Nrf52RadioRegisters<On<TxIdle>> {
+    type SyncStateEnum = Nrf52RadioStore;
+
+    fn sync_state(self) -> Self::SyncStateEnum {
+        self.into()
+    }
+}
+
+impl SyncState for Nrf52RadioRegisters<On<Transient>> {
+    type SyncStateEnum = Nrf52RadioStore;
+
+    fn sync_state(self) -> Self::SyncStateEnum {
+        let state = self.state.get();
+
+        /////////////////////////////
+        // STATE REGISTER MAPPING //
+        // DISABLED = 0,
+        // RXRU = 1,
+        // RXIDLE = 2,
+        // RX = 3,
+        // RXDISABLED = 4,
+        // TXRU = 9,
+        // TXIDLE = 10,
+        // TX = 11,
+        // TXDISABLED = 12
+        /////////////////////////////
+        
+        match state { 
+            0 => { Nrf52RadioStore::Disabled( unsafe { transmute::<Self, Nrf52RadioRegisters<On<Disabled>>>(self) })},
+            1 => Nrf52RadioStore::Transient(self),
+            2 => { Nrf52RadioStore::RxIdle( unsafe { transmute::<Self, Nrf52RadioRegisters<On<RxIdle>>>(self) })},
+            3 => Nrf52RadioStore::Transient(self),
+            4 => Nrf52RadioStore::Transient(self),
+            9 => Nrf52RadioStore::Transient(self),
+            10 => { Nrf52RadioStore::TxIdle( unsafe { transmute::<Self, Nrf52RadioRegisters<On<TxIdle>>>(self) })},
+            11 => Nrf52RadioStore::Transient(self),
+            12 => Nrf52RadioStore::Transient(self),
+            _ => unimplemented!(),    
+        }
     }
 }
 
@@ -162,7 +219,7 @@ struct RadioRegisters {
     task_start: WriteOnly<u32, Task::Register>,
     /// Stop Radio
     /// - Address: 0x00c - 0x010
-    #[RegAttributes([On(Any)], StateChange(On(Transient), Task::ENABLE::SET, stoptx))]
+    #[RegAttributes([On(Any)], StateChange(On(Transient), Task::ENABLE::SET, stop))]
     task_stop: WriteOnly<u32, Task::Register>,
     /// Disable Radio
     /// - Address: 0x010 - 0x014
@@ -184,9 +241,11 @@ struct RadioRegisters {
     _reserved1: [u32; 2],
     /// Stop the bit counter
     /// - Address: 0x02c - 0x030
+    #[RegAttributes([On(RxIdle)], StateChange(On(Transient), Task::ENABLE::SET, ccastart))]
     task_ccastart: WriteOnly<u32, Task::Register>,
     /// Stop the bit counter
     /// - Address: 0x030 - 0x034
+    #[RegAttributes([On(Any)], StateChange(On(Transient), Task::ENABLE::SET, ccastop))]
     task_ccastop: WriteOnly<u32, Task::Register>,
     /// Reserved
     _reserved2: [u32; 51],
@@ -368,7 +427,6 @@ struct RadioRegisters {
     _reserved17: [u32; 611],
     /// Peripheral power control
     /// - Address: 0xFFC - 0x1000
-    #[RegAttributes([On(Any), Off], StateChangeRW)]
     #[RegAttributes([Off], StateChange(On(Disabled), Task::ENABLE::SET, power_on))]
     #[RegAttributes([On(Disabled)], StateChange(Off, Task::ENABLE::CLEAR))]
     power: ReadWrite<u32, Task::Register>,
@@ -764,12 +822,14 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> AlarmClient for Radio<'a, PM> {
     fn alarm(&self) {
         let _ = self
             .power_manager
-            .use_power_expecting::<_, On<Any>>(|registers| {
+            .use_power_expecting::<_, On<RxIdle>>(|registers| {
                 // This alarm function is the callback for when the CCA backoff alarm completes
                 // Attempt a new CCA period by issuing CCASTART task
-                registers.task_ccastart.write(Task::ENABLE::SET);
-
-                Ok(self.power_manager.into_state_enum(registers).unwrap())
+                if let RegisterResult::Ok(reg) = registers.into_ccastart(self.power_manager) {
+                    Ok(reg.into())
+                } else {
+                    unimplemented!()
+                }
             });
     }
 }
@@ -867,10 +927,9 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
     #[entry_point]
     pub fn handle_interrupt(&self) {
         // Before we enter any branches, disable all interrupts.
-        self.power_manager
+        let _ = self.power_manager
             .use_power_expecting::<_, On<Any>>(|registers| {
                 self.disable_all_interrupts(&registers);
-
                 Ok(self.power_manager.into_state_enum(registers).unwrap())
             });
 
@@ -897,12 +956,17 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
                 // exhibit undefined behavior.
                 ////////////////////////////////////////////////////////////////
 
-                self.power_manager.use_power_expecting::<_, On<RxIdle>>(|registers|{
-                  // Since READY_START shortcut enabled, always clear READY event
-                    registers.event_ready.write(Event::READY::CLEAR);
+                let _ = self.power_manager.use_power_expecting::<_, On<RxIdle>>(|registers|{
+                    if registers.event_ready.is_set(Event::READY) {
+                        // The radio is ready to receive a packet. We need to
+                        // clear the READY event register before we can start
+                        // receiving.
+                        registers.event_ready.write(Event::READY::CLEAR);
+                        Ok(self.start_rx(registers).into())
+                    } 
 
                     // Completed receiving a packet, now determine if we need to send ACK
-                    if registers.event_end.is_set(Event::READY) {
+                    else if registers.event_end.is_set(Event::READY) {
                         registers.event_end.write(Event::READY::CLEAR);
                         let crc = self.crc_check(&registers);
 
@@ -976,6 +1040,7 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
                                     // the packet, but print msg for debugging
                                     // purposes, notify receive client of packet,
                                     // and reset radio to receiving.
+                                    
                                     self.rx_client.map(|client| {
                                         client.receive(
                                             self.rx_buf.take().unwrap(),
@@ -990,13 +1055,9 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
                                         "[ACKFail] Failed sending ACK in response to received packet."
                                     );
 
+                                    self.ack_buf.replace(buf);
 
-                                    if let RegisterResult::Ok(reg) = registers.into_start(self.power_manager) {
-                                        self.ack_buf.replace(buf);
-                                        Err(PowerError(reg.into(), err))
-                                    } else {
-                                        unimplemented!()
-                                    }
+                                    Ok(self.start_rx(registers).into())    
                                 } 
                                 Ok(registers) => Ok(registers.into()) 
                             }
@@ -1009,7 +1070,7 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
                                 client.receive(rbuf, frame_len, lqi, crc.is_ok(), Ok(()));
                             });
 
-                            Ok(registers.into())
+                            Ok(self.start_rx(registers).into())
                         }
                     } else {
                         Ok(registers.into())
@@ -1043,6 +1104,9 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
                                         backoff_periods * (IEEE802154_BACKOFF_PERIOD as u32),
                                     ),
                                 );
+
+                            Ok(registers.into())
+
                         } else {
                             // We have exceeded the IEEE802154_MAX_POLLING_ATTEMPTS
                             // and should fail the transmission/return buffer to
@@ -1057,12 +1121,24 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
                                 client.send_done(tbuf, false, result);
                             });
 
+                            Ok(self.start_rx(registers).into())
+                        }
+                    } else {
+                        // Start first CCA
+                        if registers.event_ready.is_set(Event::READY) {
+                            registers.event_ready.write(Event::READY::CLEAR);
 
-
+                            // Start the transmission
+                            if let RegisterResult::Ok(reg) = registers.into_ccastart(self.power_manager) {
+                                Ok(reg.into())
+                            } else {
+                                unimplemented!()
+                            }
+                        } else {
+                            // We did not just enter RxIdle, so return the registers, doing nothing.
+                            Ok(registers.into())
                         }
                     }
-
-                    Ok(registers.into())
                 });
 
                 // Handle Event_ready interrupt. The TX path performs both a TX
@@ -1100,6 +1176,7 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
                         });
 
                         if let RegisterResult::Ok(reg) = registers.into_rxen(self.power_manager) {
+                            self.state.set(RadioState::RX);
                             Ok(reg.into())
                         } else {
                             unimplemented!()
@@ -1122,17 +1199,26 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
                 let _ = self
                     .power_manager
                     .use_power_expecting::<_, On<TxIdle>>(|registers| {
-                        // Since READY_START shortcut enabled, always clear READY event
-                        registers.event_ready.write(Event::READY::CLEAR);
+                        if registers.event_ready.is_set(Event::READY) {
+                            // The radio is ready to transmit a packet. We need to
+                            // clear the READY event register before we can start
+                            // transmitting.
+                            registers.event_ready.write(Event::READY::CLEAR);
+                            
+                            if let RegisterResult::Ok(reg) = registers.into_start(self.power_manager) {
+                                Ok(reg.into())
+                            } else {
+                                unimplemented!()
+                            }
+                        }
 
                         // Completed sending ACK
-                        if registers.event_end.is_set(Event::READY) {
+                        else if registers.event_end.is_set(Event::READY) {
                             registers.event_end.write(Event::READY::CLEAR);
                             
                             // Unwrap fail = TX Buffer is missing and was mistakenly not
                             // replaced after completion of set_dma_ptr(...)
                             let tbuf = self.tx_buf.take().unwrap();
-
                             // We must replace the ACK buffer that was passed to tx_buf
                             self.ack_buf.replace(tbuf);
 
@@ -1157,6 +1243,7 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
                             });
 
                             if let RegisterResult::Ok(reg) = registers.into_rxen(self.power_manager) {
+                                self.state.set(RadioState::RX);
                                 Ok(reg.into())
                             } else {
                                 unimplemented!()
@@ -1175,6 +1262,7 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
             
             Ok(self.power_manager.into_state_enum(registers).unwrap())
         });
+
         
     }
 
@@ -1185,7 +1273,7 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
     {
         registers
             .intenset
-            .write(Interrupt::READY::SET + Interrupt::CCABUSY::SET + Interrupt::END::SET);
+            .write(Interrupt::READY::SET + Interrupt::CCABUSY::SET + Interrupt::END::SET + Interrupt::DISABLED::SET);
     }
 
     pub fn enable_interrupt<S>(&self, intr: u32, registers: &Nrf52RadioRegisters<On<S>>)
@@ -1348,15 +1436,16 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
     }
 
     fn send_ack(&self, ack_buf: &'static mut [u8], frame_len: usize, registers: Nrf52RadioRegisters<On<RxIdle>>) -> Result<Nrf52RadioRegisters<On<Transient>>, (ErrorCode, &'static mut [u8], Nrf52RadioRegisters<On<RxIdle>>)>{
+        self.state.set(RadioState::ACK);
         if ack_buf.len() < radio::PSDU_OFFSET + frame_len + radio::MFR_SIZE {
             // Not enough room for CRC or PHR or reserved byte
             return Err((ErrorCode::SIZE, ack_buf, registers));
         }
 
-        // We need to be in a state we can kick off a txen or rxen from (Disable, RxIdle, TxIdle)
         // Insert the PHR which is the PDSU length.
         ack_buf[radio::PHR_OFFSET] = (frame_len + radio::MFR_SIZE) as u8;
-        self.tx_buf.replace(ack_buf);
+        
+        self.tx_buf.replace(self.set_dma_ptr(ack_buf, &registers)); 
         
         if let RegisterResult::Ok(reg) = registers.into_txen(self.power_manager) {
             Ok(reg.into())
@@ -1365,7 +1454,21 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
         }
     }
 
-    fn rx(&self) {}
+    fn start_rx(&self, registers: Nrf52RadioRegisters<On<RxIdle>>) -> Nrf52RadioRegisters<On<Transient>> {
+        self.state.set(RadioState::RX);
+
+        // Unwrap fail = Radio RX Buffer is missing (may be due to receive client not replacing in receive(...) method,
+        // or some instance in  driver taking buffer without properly replacing).
+        let rbuf = self.rx_buf.take().unwrap();
+        self.rx_buf.replace(self.set_dma_ptr(rbuf, &registers));
+
+        if let RegisterResult::Ok(reg) = registers.into_start(self.power_manager) {
+            reg.into()
+        } else {
+            unimplemented!()
+        }
+    }
+
 
 }
 
@@ -1373,6 +1476,11 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> kernel::hil::radio::RadioConfig
     for Radio<'a, PM>
 {
     fn initialize(&self) -> Result<(), ErrorCode> {
+        let _ = self.power_manager.use_power_expecting::<_, Off>(|registers| {
+            let registers = self.radio_on(registers);
+            Ok(registers.into())
+        });
+
         self.power_manager.use_power_expecting::<_, On<Disabled>>(|registers| {
             self.radio_initialize(&registers);
             Ok(registers.into())
@@ -1389,6 +1497,8 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> kernel::hil::radio::RadioConfig
 
     fn start(&self) -> Result<(), ErrorCode> {
         self.state.set(RadioState::RX);
+
+        let _ = self.initialize();
 
         let res = self
             .power_manager
@@ -1421,11 +1531,7 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> kernel::hil::radio::RadioConfig
                         }
                     }
                     Nrf52RadioStore::RxIdle(reg)=> {
-                        if let RegisterResult::Ok(reg) = reg.into_start(self.power_manager) {
-                            Ok(reg.into())
-                        } else {
-                            unimplemented!()
-                        }
+                        Ok(self.start_rx(reg).into())
                     }
                 }
             });
@@ -1443,7 +1549,7 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> kernel::hil::radio::RadioConfig
     }
 
     fn stop(&self) -> Result<(), ErrorCode> {
-        self.power_manager.use_power_expecting::<_, On<Any>>(|registers|{
+        let _ = self.power_manager.use_power_expecting::<_, On<Any>>(|registers|{
             self.state.set(RadioState::OFF);
             if let RegisterResult::Ok(reg) = registers.into_disable(self.power_manager) {
                 Ok(reg.into())
@@ -1461,15 +1567,15 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> kernel::hil::radio::RadioConfig
     }
 
     fn is_on(&self) -> bool {
-        let mut is_on = false;
-
         let try_on_state = self.power_manager.use_power_expecting::<_, On<Any>>(|registers| {
-            is_on = registers.power.is_set(Task::ENABLE);
             Ok(self.power_manager.into_state_enum(registers).unwrap())
         });
 
-        true
-            
+        if try_on_state.is_err() {
+            return false;
+        } else {
+            return true
+        } 
     }
 
     fn busy(&self) -> bool {
@@ -1594,7 +1700,6 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> kernel::hil::radio::RadioData<'
         buf: &'static mut [u8],
         frame_len: usize,
     ) -> Result<(), (ErrorCode, &'static mut [u8])> {
-        
         if self.state.get() == RadioState::OFF {
             return Err((ErrorCode::OFF, buf));
         } else if self.busy() {
@@ -1604,12 +1709,25 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> kernel::hil::radio::RadioData<'
             return Err((ErrorCode::SIZE, buf));
         }
 
+
+        // Check that we are not in the Off state. We have to do this due to buf and closure / moving.
+        let off_err = self.power_manager.use_power_expecting::<_, Off>(|registers| {
+            Ok(registers.into())
+        });
+
+        if off_err.is_ok() {
+            return Err((ErrorCode::OFF, buf));
+        }
+        
+        self.state.set(RadioState::TX);
+
         // We need to be in a state we can kick off a txen or rxen from (Disable, RxIdle, TxIdle)
         // Insert the PHR which is the PDSU length.
         buf[radio::PHR_OFFSET] = (frame_len + radio::MFR_SIZE) as u8;
-
         
-        self.power_manager.use_power_expecting::<_, On<Any>>(|registers| {
+        let _ = self.power_manager.use_power_expecting::<_, On<Any>>(|registers| {
+            self.tx_buf.replace(self.set_dma_ptr(buf, &registers));
+
             match self.power_manager.into_state_enum(registers).unwrap() {
                 Nrf52RadioStore::Disabled(reg) => {
                     if let RegisterResult::Ok(reg) = reg.into_rxen(self.power_manager) {
@@ -1627,28 +1745,38 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> kernel::hil::radio::RadioData<'
                     }
                 }
                 Nrf52RadioStore::RxIdle(reg) => { 
-                    if let RegisterResult::Ok(reg) = reg.into_start(self.power_manager) {
+                    if let RegisterResult::Ok(reg) = reg.into_ccastart(self.power_manager) {
                         Ok(reg.into())
                     } else {
                         unimplemented!()
                     }
                 }
                 Nrf52RadioStore::Transient(reg) => {
-                    Err(PowerError(reg.into(), ErrorCode::BUSY))
+                    // This may be because we are disabling radio etc, or it may be because 
+                    // we are currently in the middle of an rx or tx, because RX / TX are 
+                    // transient, we cannot know the state of the hardware.
+                    // we checked earlier that we are not in a tx, so we must be in rx, 
+                    // which we cancel
+                    if let RegisterResult::Ok(reg) = reg.into_stop(self.power_manager) {
+                        let reg_res = reg.sync_state();
+
+                        if let Nrf52RadioStore::RxIdle(reg) = reg_res {
+                            if let RegisterResult::Ok(reg) = reg.into_ccastart(self.power_manager) {
+                                Ok(reg.into())
+                            } else {
+                                unimplemented!()
+                            }
+                        } else {
+                            Ok(reg_res)
+                        }
+                    } else {
+                        unimplemented!()
+                    }
                 }
                 _ => unreachable!()
-            }}).map_or_else(|err| {
-                Err((err, buf))
-            }, |store| {
+            }});
 
-            
-        // The tx_buf does not possess static memory. This buffer only
-        // temporarily holds a reference to another buffer passed as a function
-        // argument. The tx_buf holds ownership of this buffer until it is
-        // returned through the send_done(...) function.
-        // self.tx_buf.replace(self.set_dma_ptr(buf, &registers));
-                Ok(())
-            })
+            Ok(())
 }
 }
 
