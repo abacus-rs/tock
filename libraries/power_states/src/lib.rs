@@ -7,7 +7,7 @@ use syn::{
 
 use std::{any::Any, collections::{hash_set::HashSet, HashMap}}; 
 
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Hash)]
 struct State {
     ident: syn::Ident,
     shortname: syn::Ident,
@@ -847,13 +847,13 @@ impl MacroInput {
                 }
             }
 
-            impl core::fmt::Debug for #store_name {
-                fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                    match self {
-                        #(#debug_body),*
-                    }
-                }
-            }
+            // impl core::fmt::Debug for #store_name {
+            //     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            //         match self {
+            //             #(#debug_body),*
+            //         }
+            //     }
+            // }
 
         });
 
