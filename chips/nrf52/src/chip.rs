@@ -3,7 +3,7 @@
 // Copyright Tock Contributors 2022.
 
 use core::fmt::Write;
-use cortexm4::{nvic, CortexM4, CortexMVariant};
+use cortexm4f::{nvic, CortexM4F, CortexMVariant};
 use kernel::{platform::chip::InterruptService, power_manager::PowerManager};
 use nrf5x::temperature::Nrf5xTempPeripheral;
 

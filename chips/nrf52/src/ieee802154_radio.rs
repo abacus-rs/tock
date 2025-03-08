@@ -1341,7 +1341,7 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
             .write(CrcConfiguration::LEN::TWO + CrcConfiguration::SKIPADDR::IEEE802154);
         registers
             .crcinit
-            .set(nrf52::constants::RADIO_CRCINIT_IEEE802154);
+            .set(nrf5x::constants::RADIO_CRCINIT_IEEE802154);
         registers
             .crcpoly
             .set(crate::constants::RADIO_CRCPOLY_IEEE802154);
@@ -1363,10 +1363,10 @@ impl<'a, PM: PowerManager<Nrf52RadioPeripheral>> Radio<'a, PM> {
         S: SubState,
     {
         registers.ccactrl.write(
-            CCAControl::CCAMODE.val(nrf52::constants::IEEE802154_CCA_MODE)
-                + CCAControl::CCAEDTHRESH.val(nrf52::constants::IEEE802154_CCA_ED_THRESH)
-                + CCAControl::CCACORRTHRESH.val(nrf52::constants::IEEE802154_CCA_CORR_THRESH)
-                + CCAControl::CCACORRCNT.val(nrf52::constants::IEEE802154_CCA_CORR_CNT),
+            CCAControl::CCAMODE.val(nrf5x::constants::IEEE802154_CCA_MODE)
+                + CCAControl::CCAEDTHRESH.val(nrf5x::constants::IEEE802154_CCA_ED_THRESH)
+                + CCAControl::CCACORRTHRESH.val(nrf5x::constants::IEEE802154_CCA_CORR_THRESH)
+                + CCAControl::CCACORRCNT.val(nrf5x::constants::IEEE802154_CCA_CORR_CNT),
         );
     }
 
