@@ -10,6 +10,7 @@ use nrf52::{
 use crate::ieee802154_radio::Nrf52RadioPeripheral;
 
 /// This struct, when initialized, instantiates all peripheral drivers for the nrf52840.
+///
 /// If a board wishes to use only a subset of these peripherals, this
 /// should not be used or imported, and a modified version should be
 /// constructed manually in main.rs.

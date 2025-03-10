@@ -13,6 +13,7 @@ use crate::clocks::Clocks;
 use crate::gpio::{RPGpio, RPPins, SIO};
 use crate::i2c;
 use crate::interrupts;
+use crate::pio::Pio;
 use crate::pwm;
 use crate::resets::Resets;
 use crate::rtc;
@@ -53,7 +54,7 @@ impl<'a, I: InterruptService> Rp2040<'a, I> {
     }
 }
 
-impl<'a, I: InterruptService> Chip for Rp2040<'a, I> {
+impl<I: InterruptService> Chip for Rp2040<'_, I> {
     type MPU = cortexm0p::mpu::MPU;
     type UserspaceKernelBoundary = cortexm0p::syscall::SysCall;
 
@@ -123,6 +124,8 @@ pub struct Rp2040DefaultPeripherals<'a> {
     pub clocks: Clocks,
     pub i2c0: i2c::I2c<'a, 'a>,
     pub pins: RPPins<'a>,
+    pub pio0: Pio,
+    pub pio1: Pio,
     pub pwm: pwm::Pwm<'a>,
     pub resets: Resets,
     pub sio: SIO,
@@ -137,13 +140,15 @@ pub struct Rp2040DefaultPeripherals<'a> {
     pub rtc: rtc::Rtc<'a>,
 }
 
-impl<'a> Rp2040DefaultPeripherals<'a> {
+impl Rp2040DefaultPeripherals<'_> {
     pub fn new() -> Self {
         Self {
             adc: adc::Adc::new(),
             clocks: Clocks::new(),
             i2c0: i2c::I2c::new_i2c0(),
             pins: RPPins::new(),
+            pio0: Pio::new_pio0(),
+            pio1: Pio::new_pio1(),
             pwm: pwm::Pwm::new(),
             resets: Resets::new(),
             sio: SIO::new(),
@@ -176,6 +181,10 @@ impl<'a> Rp2040DefaultPeripherals<'a> {
 impl InterruptService for Rp2040DefaultPeripherals<'_> {
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
         match interrupt {
+            interrupts::PIO0_IRQ_0 => {
+                self.pio0.handle_interrupt();
+                true
+            }
             interrupts::TIMER_IRQ_0 => {
                 self.timer.handle_interrupt();
                 true

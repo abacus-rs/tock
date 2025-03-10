@@ -422,7 +422,7 @@ unsafe fn start() -> (
 
     // `finalize()` configures the underlying USART, so we need to
     // tell `send_byte()` not to configure the USART again.
-    io::WRITER.set_initialized();
+    (*addr_of_mut!(io::WRITER)).set_initialized();
 
     // Create capabilities that the board needs to call certain protected kernel
     // functions.
@@ -806,7 +806,8 @@ unsafe fn start() -> (
         nonvolatile_storage,
 
         scheduler,
-        systick: cortexm4::systick::SysTick::new(),
+        // Systick uses the HSI, which runs at 8MHz
+        systick: cortexm4::systick::SysTick::new_with_calibration(8_000_000),
         watchdog: &peripherals.watchdog,
     };
 

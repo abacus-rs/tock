@@ -24,6 +24,7 @@ use kernel::scheduler::round_robin::RoundRobinSched;
 use kernel::{create_capability, debug, static_init};
 
 use stm32f401cc::chip_specs::Stm32f401Specs;
+use stm32f401cc::clocks::hsi::HSI_FREQUENCY_MHZ;
 use stm32f401cc::interrupt_service::Stm32f401ccDefaultPeripherals;
 
 /// Support routines for debugging I/O.
@@ -275,7 +276,7 @@ unsafe fn start() -> (
     let uart_mux = components::console::UartMuxComponent::new(&base_peripherals.usart2, 115200)
         .finalize(components::uart_mux_component_static!());
 
-    io::WRITER.set_initialized();
+    (*addr_of_mut!(io::WRITER)).set_initialized();
 
     // Create capabilities that the board needs to call certain protected kernel
     // functions.
@@ -448,7 +449,9 @@ unsafe fn start() -> (
         alarm,
         gpio,
         scheduler,
-        systick: cortexm4::systick::SysTick::new(),
+        systick: cortexm4::systick::SysTick::new_with_calibration(
+            (HSI_FREQUENCY_MHZ * 1_000_000) as u32,
+        ),
     };
 
     debug!("Initialization complete. Entering main loop");

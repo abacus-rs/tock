@@ -38,7 +38,7 @@ impl<'a> NrfStartupComponent<'a> {
     }
 }
 
-impl<'a> Component for NrfStartupComponent<'a> {
+impl Component for NrfStartupComponent<'_> {
     type StaticInput = ();
     type Output = ();
     fn finalize(self, _s: Self::StaticInput) -> Self::Output {
@@ -84,7 +84,7 @@ impl<'a> Component for NrfStartupComponent<'a> {
         // Configure reset pins
         if uicr
             .get_psel0_reset_pin()
-            .map_or(true, |pin| pin != self.button_rst_pin)
+            .is_none_or(|pin| pin != self.button_rst_pin)
         {
             uicr.set_psel0_reset_pin(self.button_rst_pin);
             while !self.nvmc.is_ready() {}
@@ -92,7 +92,7 @@ impl<'a> Component for NrfStartupComponent<'a> {
         }
         if uicr
             .get_psel1_reset_pin()
-            .map_or(true, |pin| pin != self.button_rst_pin)
+            .is_none_or(|pin| pin != self.button_rst_pin)
         {
             uicr.set_psel1_reset_pin(self.button_rst_pin);
             while !self.nvmc.is_ready() {}
@@ -139,7 +139,7 @@ impl<'a> NrfClockComponent<'a> {
     }
 }
 
-impl<'a> Component for NrfClockComponent<'a> {
+impl Component for NrfClockComponent<'_> {
     type StaticInput = ();
     type Output = ();
     fn finalize(self, _s: Self::StaticInput) -> Self::Output {
