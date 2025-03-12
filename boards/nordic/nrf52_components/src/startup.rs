@@ -188,9 +188,7 @@ pub enum UartChannel<'a> {
 
 pub struct UartChannelComponent<PM>
 where
-    PM: 'static
-        + PowerManager<nrf52::temperature::Nrf5xTempPeripheral>
-        + PowerManager<nrf52::uart::Nrf52UartePeripheral>,
+    PM: 'static + PowerManager<nrf52::uart::Nrf52UartePeripheral>,
 {
     uart_channel: UartChannel<'static>,
     mux_alarm: &'static MuxAlarm<'static, nrf52::rtc::Rtc<'static>>,
@@ -199,9 +197,7 @@ where
 
 impl<PM> UartChannelComponent<PM>
 where
-    PM: 'static
-        + PowerManager<nrf52::temperature::Nrf5xTempPeripheral>
-        + PowerManager<nrf52::uart::Nrf52UartePeripheral>,
+    PM: 'static + PowerManager<nrf52::uart::Nrf52UartePeripheral>,
 {
     pub fn new(
         uart_channel: UartChannel<'static>,
@@ -218,9 +214,7 @@ where
 
 impl<PM> Component for UartChannelComponent<PM>
 where
-    PM: 'static
-        + PowerManager<nrf52::temperature::Nrf5xTempPeripheral>
-        + PowerManager<nrf52::uart::Nrf52UartePeripheral>,
+    PM: 'static + PowerManager<nrf52::uart::Nrf52UartePeripheral>,
 {
     type StaticInput = (
         &'static mut MaybeUninit<VirtualMuxAlarm<'static, nrf52::rtc::Rtc<'static>>>,

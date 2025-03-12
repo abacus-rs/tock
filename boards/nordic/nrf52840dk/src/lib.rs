@@ -73,6 +73,7 @@
 use core::ptr::addr_of;
 
 use capsules_core::virtualizers::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
+use capsules_extra::ieee802154;
 use capsules_extra::net::ieee802154::MacAddress;
 use capsules_extra::net::ipv6::ip_utils::IPAddr;
 use kernel::component::Component;
@@ -248,6 +249,8 @@ pub struct Platform {
     kv_driver: &'static KVDriver,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
+    ieee802154: &'static Ieee802154Driver,
+    eui64: &'static Eui64Driver,
 }
 
 impl SyscallDriverLookup for Platform {
@@ -270,6 +273,8 @@ impl SyscallDriverLookup for Platform {
             capsules_core::i2c_master_slave_driver::DRIVER_NUM => f(Some(self.i2c_master_slave)),
             capsules_core::spi_controller::DRIVER_NUM => f(Some(self.spi_controller)),
             capsules_extra::kv_driver::DRIVER_NUM => f(Some(self.kv_driver)),
+            capsules_extra::eui64::DRIVER_NUM => f(Some(self.eui64)),
+            capsules_extra::ieee802154::DRIVER_NUM => f(Some(self.ieee802154)),
             _ => f(None),
         }
     }
@@ -347,7 +352,7 @@ pub unsafe fn ieee802154_udp(
         device_id,
     )
     .finalize(components::ieee802154_component_static!(
-        nrf52840::ieee802154_radio::Radio<'static, Nrf52840PowerManager>,
+        nrf52840::ieee802154_radio::Radio<Nrf52840PowerManager>,
         nrf52840::aes::AesECB<'static>
     ));
 
@@ -897,6 +902,9 @@ pub unsafe fn start() -> (
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(&*addr_of!(PROCESSES))
         .finalize(components::round_robin_component_static!(NUM_PROCS));
 
+    let (eui64, ieee802154, udp_driver) =
+        ieee802154_udp(board_kernel, nrf52840_peripherals, mux_alarm);
+
     let platform = Platform {
         button,
         ble_radio,
@@ -919,6 +927,8 @@ pub unsafe fn start() -> (
         kv_driver,
         scheduler,
         systick: cortexm4::systick::SysTick::new_with_calibration(64000000),
+        ieee802154,
+        eui64,
     };
 
     let _ = platform.pconsole.start();

@@ -24,9 +24,6 @@ const FAULT_RESPONSE: capsules_system::process_policies::PanicFaultPolicy =
 
 struct Platform {
     base: nrf52840dk_lib::Platform,
-    eui64_driver: &'static nrf52840dk_lib::Eui64Driver,
-    ieee802154_driver: &'static nrf52840dk_lib::Ieee802154Driver,
-    udp_driver: &'static capsules_extra::net::udp::UDPDriver<'static>,
 }
 
 impl SyscallDriverLookup for Platform {
@@ -35,9 +32,6 @@ impl SyscallDriverLookup for Platform {
         F: FnOnce(Option<&dyn kernel::syscall::SyscallDriver>) -> R,
     {
         match driver_num {
-            capsules_extra::eui64::DRIVER_NUM => f(Some(self.eui64_driver)),
-            capsules_extra::net::udp::DRIVER_NUM => f(Some(self.udp_driver)),
-            capsules_extra::ieee802154::DRIVER_NUM => f(Some(self.ieee802154_driver)),
             _ => self.base.with_driver(driver_num, f),
         }
     }
@@ -88,14 +82,8 @@ pub unsafe fn main() {
     // IEEE 802.15.4 and UDP
     //--------------------------------------------------------------------------
 
-    let (eui64_driver, ieee802154_driver, udp_driver) =
-        nrf52840dk_lib::ieee802154_udp(board_kernel, default_peripherals, mux_alarm);
-
     let platform = Platform {
         base: base_platform,
-        eui64_driver,
-        ieee802154_driver,
-        udp_driver,
     };
 
     // These symbols are defined in the linker script.
