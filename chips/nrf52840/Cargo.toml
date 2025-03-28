@@ -12,7 +12,6 @@ edition.workspace = true
 cortexm4f = { path = "../../arch/cortex-m4f" }
 kernel = { path = "../../kernel" }
 nrf52 = { path = "../nrf52" }
-power_states = { path = "../../libraries/power_states"}
 
 [lints]
 workspace = true

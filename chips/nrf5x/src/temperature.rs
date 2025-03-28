@@ -14,6 +14,8 @@
 
 use core::cell::Cell;
 
+use cortexm4f::dwt;
+use kernel::hil::hw_debug::CycleCounter;
 use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
 use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
@@ -151,13 +153,13 @@ impl<'a> Temp<'a> {
     }
 
     /// Temperature interrupt handler
-    pub fn handle_interrupt(self) {
-        if self.registers.is_none() {
-            return;
-        }
+    pub fn handle_interrupt(&self) {
+        let dwt = dwt::Dwt::new();
+        let start = dwt.count();
+        dwt.start();
 
-        match self.registers.take().unwrap() {
-            Nrf5xTempStore::Reading(reg) => {
+        match self.registers.take() {
+            Some(Nrf5xTempStore::Reading(reg)) => {
                 // disable interrupts
                 self.disable_interrupts(&reg);
 
@@ -173,8 +175,13 @@ impl<'a> Temp<'a> {
 
                 self.registers.set(reg_result.into())
             }
-            Nrf5xTempStore::Off(reg) => self.registers.set(reg.into()),
+            Some(Nrf5xTempStore::Off(reg)) => self.registers.set(reg.into()),
+            None => {}
         }
+
+        dwt.stop();
+        let end = dwt.count();
+        kernel::debug!("[EVAL] handle_interrupt {}", (end - start));
     }
 
     fn enable_interrupts<S: State>(&self, reg: &Nrf5xTempRegisters<S>) {
@@ -188,22 +195,27 @@ impl<'a> Temp<'a> {
 
 impl<'a> kernel::hil::sensors::TemperatureDriver<'a> for Temp<'a> {
     fn read_temperature(&self) -> Result<(), ErrorCode> {
-        if self.registers.is_none() {
-            return Err(ErrorCode::BUSY);
-        }
+        let dwt = dwt::Dwt::new();
+        let start = dwt.count();
+        dwt.start();
 
-        match self.registers.take().unwrap() {
-            Nrf5xTempStore::Off(reg) => {
+        let res = match self.registers.take() {
+            Some(Nrf5xTempStore::Off(reg)) => {
                 self.enable_interrupts(&reg);
                 reg.event_datardy.write(Event::READY::CLEAR);
                 self.registers.set(reg.into_reading().into());
                 Ok(())
             }
-            Nrf5xTempStore::Reading(reg) => {
+            Some(Nrf5xTempStore::Reading(reg)) => {
                 self.registers.set(reg.into());
                 Err(ErrorCode::ALREADY)
             }
-        }
+            None => Err(ErrorCode::BUSY),
+        };
+        dwt.stop();
+        let end = dwt.count();
+        kernel::debug!("[EVAL] read_temperature {}", (end - start));
+        res
     }
 
     fn set_client(&self, client: &'a dyn kernel::hil::sensors::TemperatureClient) {

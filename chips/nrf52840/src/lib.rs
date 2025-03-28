@@ -12,5 +12,3 @@ pub mod gpio;
 pub mod interrupt_service;
 
 pub mod peripheral_interrupts;
-
-pub mod power_manager;

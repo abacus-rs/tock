@@ -2,12 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright Tock Contributors 2022.
 
-use kernel::{hil::time::Alarm, power_manager::PowerManager};
-use nrf52::{
-    chip::Nrf52DefaultPeripherals, temperature::Nrf5xTempPeripheral, uart::Nrf52UartePeripheral,
-};
-
-use crate::ieee802154_radio::Nrf52RadioPeripheral;
+use kernel::hil::time::Alarm;
+use nrf52::chip::Nrf52DefaultPeripherals;
 
 /// This struct, when initialized, instantiates all peripheral drivers for the nrf52840.
 ///
@@ -15,31 +11,20 @@ use crate::ieee802154_radio::Nrf52RadioPeripheral;
 /// should not be used or imported, and a modified version should be
 /// constructed manually in main.rs.
 //create all base nrf52 peripherals
-pub struct Nrf52840DefaultPeripherals<'a, PM>
-where
-    PM: PowerManager<Nrf5xTempPeripheral>
-        + PowerManager<Nrf52UartePeripheral>
-        + PowerManager<Nrf52RadioPeripheral>,
-{
-    pub nrf52: Nrf52DefaultPeripherals<'a, PM>,
-    pub ieee802154_radio: crate::ieee802154_radio::Radio<'a, PM>,
+pub struct Nrf52840DefaultPeripherals<'a> {
+    pub nrf52: Nrf52DefaultPeripherals<'a>,
+    pub ieee802154_radio: crate::ieee802154_radio::Radio<'a>,
     pub usbd: crate::usbd::Usbd<'a>,
     pub gpio_port: crate::gpio::Port<'a, { crate::gpio::NUM_PINS }>,
 }
 
-impl<'a, PM> Nrf52840DefaultPeripherals<'a, PM>
-where
-    PM: PowerManager<Nrf5xTempPeripheral>
-        + PowerManager<Nrf52UartePeripheral>
-        + PowerManager<Nrf52RadioPeripheral>,
-{
+impl Nrf52840DefaultPeripherals<'_> {
     pub unsafe fn new(
         ieee802154_radio_ack_buf: &'static mut [u8; crate::ieee802154_radio::ACK_BUF_SIZE],
-        pm: &'a PM,
     ) -> Self {
         Self {
-            nrf52: Nrf52DefaultPeripherals::new(pm),
-            ieee802154_radio: crate::ieee802154_radio::Radio::new(ieee802154_radio_ack_buf, pm),
+            nrf52: Nrf52DefaultPeripherals::new(),
+            ieee802154_radio: crate::ieee802154_radio::Radio::new(ieee802154_radio_ack_buf),
             usbd: crate::usbd::Usbd::new(),
             gpio_port: crate::gpio::nrf52840_gpio_create(),
         }
@@ -54,12 +39,7 @@ where
         self.nrf52.init();
     }
 }
-impl<'a, PM> kernel::platform::chip::InterruptService for Nrf52840DefaultPeripherals<'a, PM>
-where
-    PM: PowerManager<Nrf5xTempPeripheral>
-        + PowerManager<Nrf52UartePeripheral>
-        + PowerManager<Nrf52RadioPeripheral>,
-{
+impl kernel::platform::chip::InterruptService for Nrf52840DefaultPeripherals<'_> {
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
         match interrupt {
             crate::peripheral_interrupts::USBD => self.usbd.handle_interrupt(),

@@ -12,7 +12,6 @@ edition.workspace = true
 cortexm4f = { path = "../../arch/cortex-m4f" }
 kernel = { path = "../../kernel" }
 enum_primitive = { path = "../../libraries/enum_primitive" }
-power_states = { path = "../../libraries/power_states" }
 
 [dependencies.nrf5x]
 path = "../nrf5x"
