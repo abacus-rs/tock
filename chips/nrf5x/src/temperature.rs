@@ -12,7 +12,9 @@
 //! * Fredrik Nilsson <frednils@student.chalmers.se>
 //! * Date: March 03, 2017
 
-use kernel::utilities::cells::OptionalCell;
+use core::cell::Cell;
+
+use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
 use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
 use kernel::utilities::StaticRef;
@@ -135,40 +137,44 @@ register_bitfields! [u32,
     ]
 ];
 
-pub struct Temp<'a, PM: PowerManager<Nrf5xTempPeripheral>> {
+pub struct Temp<'a> {
     client: OptionalCell<&'a dyn kernel::hil::sensors::TemperatureClient>,
-    power_manager: &'a PM,
+    registers: OptionalCell<Nrf5xTempStore>,
 }
 
-impl<'a, PM: PowerManager<Nrf5xTempPeripheral>> Temp<'a, PM> {
-    pub fn new(pm: &'a PM) -> Temp<'a, PM> {
+impl<'a> Temp<'a> {
+    pub fn new() -> Temp<'a> {
         Temp {
             client: OptionalCell::empty(),
-            power_manager: pm,
+            registers: OptionalCell::new(Nrf5xTempStore::Off(Nrf5xTempRegisters::new())),
         }
     }
 
     /// Temperature interrupt handler
-    #[entry_point]
-    pub fn handle_interrupt(&self) {
-        // TODO: Anthony is working on a way for this to be outside the interrupt handler. Placing this here
-        // for now.
-        let _ = self.power_manager.use_power_expecting::<_, Reading>(|reg| {
-            // disable interrupts
-            self.disable_interrupts(&reg);
+    pub fn handle_interrupt(self) {
+        if self.registers.is_none() {
+            return;
+        }
 
-            // get temperature
-            // Result of temperature measurement in °C, 2's complement format, 0.25 °C steps
-            let temp = (reg.temp.get() as i32 * 100) / 4;
+        match self.registers.take().unwrap() {
+            Nrf5xTempStore::Reading(reg) => {
+                // disable interrupts
+                self.disable_interrupts(&reg);
 
-            // stop measurement
-            let reg_result = reg.into_off(self.power_manager);
+                // get temperature
+                // Result of temperature measurement in °C, 2's complement format, 0.25 °C steps
+                let temp = (reg.temp.get() as i32 * 100) / 4;
 
-            // trigger callback with temperature
-            self.client.map(|client| client.callback(Ok(temp)));
+                // stop measurement
+                let reg_result = reg.into_off();
 
-            reg_result.into_closure_return()
-        });
+                // trigger callback with temperature
+                self.client.map(|client| client.callback(Ok(temp)));
+
+                self.registers.set(reg_result.into())
+            }
+            Nrf5xTempStore::Off(reg) => self.registers.set(reg.into()),
+        }
     }
 
     fn enable_interrupts<S: State>(&self, reg: &Nrf5xTempRegisters<S>) {
@@ -180,16 +186,24 @@ impl<'a, PM: PowerManager<Nrf5xTempPeripheral>> Temp<'a, PM> {
     }
 }
 
-impl<'a, PM: PowerManager<Nrf5xTempPeripheral>> kernel::hil::sensors::TemperatureDriver<'a>
-    for Temp<'a, PM>
-{
+impl<'a> kernel::hil::sensors::TemperatureDriver<'a> for Temp<'a> {
     fn read_temperature(&self) -> Result<(), ErrorCode> {
-        self.power_manager
-            .use_power_expecting::<_, Off>(|reg: Nrf5xTempRegisters<Off>| {
+        if self.registers.is_none() {
+            return Err(ErrorCode::BUSY);
+        }
+
+        match self.registers.take().unwrap() {
+            Nrf5xTempStore::Off(reg) => {
                 self.enable_interrupts(&reg);
                 reg.event_datardy.write(Event::READY::CLEAR);
-                reg.into_reading(self.power_manager).into_closure_return()
-            })
+                self.registers.set(reg.into_reading().into());
+                Ok(())
+            }
+            Nrf5xTempStore::Reading(reg) => {
+                self.registers.set(reg.into());
+                Err(ErrorCode::ALREADY)
+            }
+        }
     }
 
     fn set_client(&self, client: &'a dyn kernel::hil::sensors::TemperatureClient) {

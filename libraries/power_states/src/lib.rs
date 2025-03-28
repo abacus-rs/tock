@@ -611,9 +611,8 @@ impl Register {
                             #register_name<S>: Reg,
                             #(#to_state_generics_constrained),*
                         {
-                            fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                            fn #to_state_fn_name(
                                 self,
-                                pm: &PM,
                             ) -> RegisterResult<#register_name<#to_state>, #register_name<S>>;
                         }
                     }
@@ -640,9 +639,8 @@ impl Register {
                                 #register_name<#from_state>: Reg,
                                 #(#constraints),*
                             {
-                                fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                                fn #to_state_fn_name(
                                     self,
-                                    _pm: &PM,
                                 ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>> {
                                     self.#reg_field_name.reg.write(#instruction);
 
@@ -666,10 +664,9 @@ impl Register {
                         where 
                             #register_name<S>: Reg
                         {
-                            fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                            fn #to_state_fn_name(
                                 self,
-                                pm: &PM,
-                            ) -> RegisterResult<#register_name<#to_state>, #register_name<S>>;
+                            ) -> #register_name<#to_state>;
                         }
                     });
 
@@ -678,17 +675,16 @@ impl Register {
 
                         state_change_output.extend(quote!{
                             impl #trait_name<#from_state> for #register_name<#from_state> {
-                                fn #to_state_fn_name<PM: PowerManager<#peripheral_name>>(
+                                fn #to_state_fn_name(
                                     self,
-                                    _pm: &PM,
-                                ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>> {
+                                ) -> #register_name<#to_state> {
                                     self.#reg_field_name.reg.write(#instruction);
 
                                     unsafe {
-                                        Ok(transmute::<
+                                        transmute::<
                                             #register_name<#from_state>,
                                             #register_name<#to_state>
-                                        >(self)).into()
+                                        >(self)
                                     }
                                 }
                             }
