@@ -57,8 +57,10 @@
 
 use core::cell::Cell;
 
+use cortexm4f::dwt;
 use kernel::grant::{AllowRoCount, AllowRwCount, Grant, UpcallCount};
 use kernel::hil;
+use kernel::hil::hw_debug::CycleCounter;
 use kernel::syscall::{CommandReturn, SyscallDriver};
 use kernel::{ErrorCode, ProcessId};
 
@@ -99,10 +101,14 @@ impl<'a, T: hil::sensors::TemperatureDriver<'a>> TemperatureSensor<'a, T> {
                 // If we do not already have an ongoing read, start one now.
                 if !self.busy.get() {
                     self.busy.set(true);
-                    match self.driver.read_temperature() {
-                        Ok(()) => CommandReturn::success(),
-                        Err(e) => CommandReturn::failure(e),
-                    }
+                    let dwt = dwt::Dwt::new();
+                    dwt.start();
+                    let start = dwt.count();
+                    self.driver.read_temperature();
+                    dwt.stop();
+                    let end = dwt.count();
+                    kernel::debug!("[EVAL] read_temperature {}", (end - start));
+                    CommandReturn::success()
                 } else {
                     // Just return success and we will get the upcall when the
                     // temperature read is ready.

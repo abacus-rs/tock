@@ -198,27 +198,21 @@ impl<'a> Temp<'a> {
 
 impl<'a> kernel::hil::sensors::TemperatureDriver<'a> for Temp<'a> {
     fn read_temperature(&self) -> Result<(), ErrorCode> {
-        let dwt = dwt::Dwt::new();
-        let start = dwt.count();
-        dwt.start();
-
-        match self.registers.take() {
-            Some(Nrf5xTempStore::Off(reg)) => {
-                self.enable_interrupts(&reg);
-                reg.event_datardy.write(Event::READY::CLEAR);
-                self.registers.set(reg.into_reading().into());
-                Ok(())
-            }
-            Some(Nrf5xTempStore::Reading(reg)) => {
-                self.registers.set(reg.into());
-                Err(ErrorCode::ALREADY)
-            }
-            None => Err(ErrorCode::BUSY),
-        };
-        dwt.stop();
-        let end = dwt.count();
-        kernel::debug!("[EVAL] read_temperature {}", (end - start));
-        Ok(())
+        self.registers.take().map_or_else(
+            || Err(ErrorCode::BUSY),
+            |state| match state {
+                Nrf5xTempStore::Off(reg) => {
+                    self.enable_interrupts(&reg);
+                    reg.event_datardy.write(Event::READY::CLEAR);
+                    self.registers.set(reg.into_reading().into());
+                    Ok(())
+                }
+                Nrf5xTempStore::Reading(reg) => {
+                    self.registers.set(reg.into());
+                    Err(ErrorCode::ALREADY)
+                }
+            },
+        )
     }
 
     fn set_client(&self, client: &'a dyn kernel::hil::sensors::TemperatureClient) {
