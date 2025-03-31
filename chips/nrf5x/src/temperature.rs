@@ -154,37 +154,27 @@ impl<'a> Temp<'a> {
 
     /// Temperature interrupt handler -- 84 cycles total
     pub fn handle_interrupt(&self) {
-        let dwt = dwt::Dwt::new();
-        let start = dwt.count();
-        dwt.start();
-        // 29 cycles for take
-        // match is 33 cycles
-        match self.registers.take() {
-            Some(Nrf5xTempStore::Reading(reg)) => {
-                // disable interrupts -- 33 cycles
-                self.disable_interrupts(&reg);
+        self.registers.take().map(|state| {
+            match state {
+                Nrf5xTempStore::Reading(reg) => {
+                    self.disable_interrupts(&reg);
 
-                // get temperature
-                // Result of temperature measurement in °C, 2's complement format, 0.25 °C steps
-                // 11 cycles
-                let temp = (reg.temp.get() as i32 * 100) / 4;
+                    // get temperature
+                    // Result of temperature measurement in °C, 2's complement format, 0.25 °C steps
+                    let temp = (reg.temp.get() as i32 * 100) / 4;
 
-                // stop measurement
-                // 11 cycles
-                let reg_result = reg.into_off();
+                    // stop measurement
+                    let reg_result = reg.into_off();
 
-                // trigger callback with temperature
-                //self.client.map(|client| client.callback(Ok(temp)));
+                    // trigger callback with temperature
+                    self.client.map(|client| client.callback(Ok(temp)));
 
-                // 24 instructions
-                self.registers.set(reg_result.into());
+                    // 24 instructions
+                    self.registers.set(reg_result.into());
+                }
+                Nrf5xTempStore::Off(reg) => self.registers.set(reg.into()),
             }
-            Some(Nrf5xTempStore::Off(reg)) => self.registers.set(reg.into()),
-            None => {}
-        }
-        dwt.stop();
-        let end = dwt.count();
-        kernel::debug!("[EVAL] handle_interrupt {}", (end - start));
+        });
     }
 
     fn enable_interrupts<S: State>(&self, reg: &Nrf5xTempRegisters<S>) {

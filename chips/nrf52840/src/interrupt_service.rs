@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright Tock Contributors 2022.
 
+use cortexm4f::dwt;
+use kernel::hil::hw_debug::CycleCounter;
 use kernel::hil::time::Alarm;
 use nrf52::chip::Nrf52DefaultPeripherals;
 
@@ -50,7 +52,15 @@ impl kernel::platform::chip::InterruptService for Nrf52840DefaultPeripherals<'_>
                     self.nrf52.ble_radio.is_enabled(),
                 ) {
                     (false, false) => (),
-                    (true, false) => self.ieee802154_radio.handle_interrupt(),
+                    (true, false) => {
+                        let dwt = dwt::Dwt::new();
+                        dwt.start();
+                        let start = dwt.count();
+                        self.ieee802154_radio.handle_interrupt();
+                        let end = dwt.count();
+                        dwt.stop();
+                        kernel::debug!("[EVAL] handle_interrupt {}", (end - start))
+                    }
                     (false, true) => self.nrf52.ble_radio.handle_interrupt(),
                     (true, true) => kernel::debug!(
                         "nRF 802.15.4 and BLE radios cannot be simultaneously enabled!"

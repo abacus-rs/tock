@@ -929,7 +929,6 @@ impl<'a> Radio<'a> {
     #[inline(never)]
     #[entry_point("registers")]
     pub fn handle_interrupt(&self) {
-        kernel::debug!("handle_interrupt");
         self.registers.take().map(|state| {
 
             // Disable Interrupts
@@ -944,11 +943,9 @@ impl<'a> Radio<'a> {
 
             let new_state = match state {
                 Nrf52RadioStore::Off(_) => {
-                    kernel::debug!("HI OFF BRANCH");
                     unreachable!()
                 }
                 Nrf52RadioStore::Disabled(reg) => {
-                    kernel::debug!("HI DISABLED BRANCH");
                     // clear interrupt
                     reg.event_disabled.write(Event::READY::CLEAR);
 
@@ -960,7 +957,6 @@ impl<'a> Radio<'a> {
                     }
                 }
                 Nrf52RadioStore::RxIdle(reg) => {
-                    kernel::debug!("HI RxIdle BRANCH");
                     if let RadioState::RX = self.state.get() {
                         if reg.event_ready.is_set(Event::READY) {
                             // The radio is ready to receive a packet. We need to
@@ -1114,7 +1110,6 @@ impl<'a> Radio<'a> {
                                 // Unwrap fail = TX Buffer is missing and was
                                 // mistakenly not replaced after completion of
                                 // set_dma_ptr(...)
-                                kernel::debug!("taker");
                                 let tbuf = self.tx_buf.take().unwrap();
                                 client.send_done(tbuf, false, result);
                             });
@@ -1139,7 +1134,6 @@ impl<'a> Radio<'a> {
 
                 }
                 Nrf52RadioStore::TxIdle(reg) => {
-                    kernel::debug!("HI TXIDLE BRANCH");
                     let radio_state = self.state.get();
 
                     if let RadioState::TX = radio_state {
@@ -1169,7 +1163,6 @@ impl<'a> Radio<'a> {
                         self.tx_client.map(|client| {
                             // Unwrap fail = TX Buffer is missing and was mistakenly
                             // not replaced after completion of set_dma_ptr(...)
-                            kernel::debug!("checker for buf {:?}", self.tx_buf.is_some());
                             let tbuf = self.tx_buf.take().unwrap();
                             client.send_done(tbuf, false, result);
                         });
@@ -1227,7 +1220,6 @@ impl<'a> Radio<'a> {
                     }
                                 }
                 Nrf52RadioStore::Transient(reg) => {
-                    kernel::debug!("HI TRANSIENT BRANCH");
                     // Do nothing.
                     reg.into()
                 }
@@ -1469,7 +1461,6 @@ impl<'a> Radio<'a> {
 
 impl<'a> kernel::hil::radio::RadioConfig<'a> for Radio<'a> {
     fn initialize(&self) -> Result<(), ErrorCode> {
-        kernel::debug!("initialize");
         self.registers
             .take()
             .map(|state| {
@@ -1601,7 +1592,6 @@ impl<'a> kernel::hil::radio::RadioConfig<'a> for Radio<'a> {
     ///
     /// Issues a callback to the config client when done.
     fn config_commit(&self) {
-        kernel::debug!("config_commit");
         self.registers.take().map(|state| {
             match &state {
                 Nrf52RadioStore::Off(_) => {
