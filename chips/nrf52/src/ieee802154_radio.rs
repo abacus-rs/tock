@@ -929,6 +929,7 @@ impl<'a> Radio<'a> {
     #[inline(never)]
     #[entry_point("registers")]
     pub fn handle_interrupt(&self) {
+        kernel::debug!("handle_interrupt");
         self.registers.take().map(|state| {
 
             // Disable Interrupts
@@ -943,9 +944,11 @@ impl<'a> Radio<'a> {
 
             let new_state = match state {
                 Nrf52RadioStore::Off(_) => {
+                    kernel::debug!("HI OFF BRANCH");
                     unreachable!()
                 }
                 Nrf52RadioStore::Disabled(reg) => {
+                    kernel::debug!("HI DISABLED BRANCH");
                     // clear interrupt
                     reg.event_disabled.write(Event::READY::CLEAR);
 
@@ -957,6 +960,7 @@ impl<'a> Radio<'a> {
                     }
                 }
                 Nrf52RadioStore::RxIdle(reg) => {
+                    kernel::debug!("HI RxIdle BRANCH");
                     if let RadioState::RX = self.state.get() {
                         if reg.event_ready.is_set(Event::READY) {
                             // The radio is ready to receive a packet. We need to
@@ -1110,6 +1114,7 @@ impl<'a> Radio<'a> {
                                 // Unwrap fail = TX Buffer is missing and was
                                 // mistakenly not replaced after completion of
                                 // set_dma_ptr(...)
+                                kernel::debug!("taker");
                                 let tbuf = self.tx_buf.take().unwrap();
                                 client.send_done(tbuf, false, result);
                             });
@@ -1134,16 +1139,17 @@ impl<'a> Radio<'a> {
 
                 }
                 Nrf52RadioStore::TxIdle(reg) => {
+                    kernel::debug!("HI TXIDLE BRANCH");
                     let radio_state = self.state.get();
 
                     if let RadioState::TX = radio_state {
 
-                // Handle Event_ready interrupt. The TX path performs both a TX
-                // ramp up and an RX ramp up. This means that there are two
-                // potential cases we must handle. The ready event due to the Rx
-                // Ramp up shortcuts to the CCASTART while the ready event due
-                // to the Tx ramp up requires we issue a start task in response
-                // to progress the state machine.
+                    // Handle Event_ready interrupt. The TX path performs both a TX
+                    // ramp up and an RX ramp up. This means that there are two
+                    // potential cases we must handle. The ready event due to the Rx
+                    // Ramp up shortcuts to the CCASTART while the ready event due
+                    // to the Tx ramp up requires we issue a start task in response
+                    // to progress the state machine.
                     if reg.event_ready.is_set(Event::READY) {
                         // In both cases, we must clear event
                         reg.event_ready.write(Event::READY::CLEAR);
@@ -1163,12 +1169,13 @@ impl<'a> Radio<'a> {
                         self.tx_client.map(|client| {
                             // Unwrap fail = TX Buffer is missing and was mistakenly
                             // not replaced after completion of set_dma_ptr(...)
+                            kernel::debug!("checker for buf {:?}", self.tx_buf.is_some());
                             let tbuf = self.tx_buf.take().unwrap();
                             client.send_done(tbuf, false, result);
                         });
 
                         // Switch to RX rampup
-                        reg.into_rxen().into() 
+                        self.switch_to_rx(reg).into()    
                     } else {
                         reg.into()
                     }
@@ -1190,12 +1197,6 @@ impl<'a> Radio<'a> {
                         else if reg.event_end.is_set(Event::READY) {
                             reg.event_end.write(Event::READY::CLEAR);
                             
-                            // Unwrap fail = TX Buffer is missing and was mistakenly not
-                            // replaced after completion of set_dma_ptr(...)
-                            let tbuf = self.tx_buf.take().unwrap();
-                            // We must replace the ACK buffer that was passed to tx_buf
-                            self.ack_buf.replace(tbuf);
-
                             // Notify receive client of packet that triggered the ACK.
                             self.rx_client.map(|client| {
                                 // Unwrap fail = Radio RX Buffer is missing (may be due
@@ -1217,7 +1218,7 @@ impl<'a> Radio<'a> {
                             });
 
                             // Begin Rx ramp up
-                            reg.into_rxen().into()
+                            self.switch_to_rx(reg).into()
                         } else {
                             reg.into()                        }
 
@@ -1226,6 +1227,7 @@ impl<'a> Radio<'a> {
                     }
                                 }
                 Nrf52RadioStore::Transient(reg) => {
+                    kernel::debug!("HI TRANSIENT BRANCH");
                     // Do nothing.
                     reg.into()
                 }
@@ -1440,9 +1442,14 @@ impl<'a> Radio<'a> {
         // Insert the PHR which is the PDSU length.
         ack_buf[radio::PHR_OFFSET] = (frame_len + radio::MFR_SIZE) as u8;
 
-        self.tx_buf.replace(self.set_dma_ptr(ack_buf, &registers));
+        self.ack_buf.replace(self.set_dma_ptr(ack_buf, &registers));
 
         Ok(registers.into_txen())
+    }
+
+    fn switch_to_rx(&self, registers: Nrf52RadioRegisters<On<TxIdle>>) -> Nrf52RadioRegisters<On<Transient>> {
+        self.state.set(RadioState::RX);
+        registers.into_rxen()
     }
 
     fn start_rx(
@@ -1713,7 +1720,6 @@ impl<'a> kernel::hil::radio::RadioData<'a> for Radio<'a> {
             // Not enough room for CRC or PHR or reserved byte
             return Err((ErrorCode::SIZE, buf));
         }
-
         match self.registers.take() {
             Some(state) => {
                 // Insert the PHR which is the PDSU length.
@@ -1725,16 +1731,19 @@ impl<'a> kernel::hil::radio::RadioData<'a> for Radio<'a> {
                         return Err((ErrorCode::OFF, buf));
                     }
                     Nrf52RadioStore::Disabled(reg) => {
+                        self.state.set(RadioState::TX);
                         self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
                         self.registers.replace(reg.into_rxen().into());
                         Ok(())
                     }
                     Nrf52RadioStore::TxIdle(reg) => {
+                        self.state.set(RadioState::TX);
                         self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
                         self.registers.replace(reg.into_rxen().into());
                         Ok(())
                     }
                     Nrf52RadioStore::RxIdle(reg) => {
+                        self.state.set(RadioState::TX);
                         self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
                         self.registers.replace(reg.into_ccastart().into());
                         Ok(())
@@ -1751,6 +1760,7 @@ impl<'a> kernel::hil::radio::RadioData<'a> for Radio<'a> {
                         let reg_res = reg.sync_state();
 
                         if let Nrf52RadioStore::RxIdle(reg) = reg_res {
+                            self.state.set(RadioState::TX);
                             self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
                             self.registers.replace(reg.into_ccastart().into());
                             Ok(())
