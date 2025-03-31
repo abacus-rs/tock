@@ -3,7 +3,8 @@
 // Copyright Tock Contributors 2022.
 
 use core::fmt::Write;
-use cortexm4f::{nvic, CortexM4F, CortexMVariant};
+use cortexm4f::{dwt, nvic, CortexM4F, CortexMVariant};
+use kernel::hil::hw_debug::CycleCounter;
 use kernel::platform::chip::InterruptService;
 
 pub struct NRF52<'a, I: InterruptService + 'a> {
@@ -89,7 +90,15 @@ impl kernel::platform::chip::InterruptService for Nrf52DefaultPeripherals<'_> {
             },
             crate::peripheral_interrupts::RNG => self.trng.handle_interrupt(),
             crate::peripheral_interrupts::RTC1 => self.rtc.handle_interrupt(),
-            crate::peripheral_interrupts::TEMP => self.temp.handle_interrupt(),
+            crate::peripheral_interrupts::TEMP => {
+                let dwt = dwt::Dwt::new();
+                dwt.start();
+                let start = dwt.count();
+                self.temp.handle_interrupt();
+                let end = dwt.count();
+                dwt.stop();
+                kernel::debug!("[EVAL] handle_interrupt {}", (end - start));
+            }
             crate::peripheral_interrupts::TIMER0 => self.timer0.handle_interrupt(),
             crate::peripheral_interrupts::TIMER1 => self.timer1.handle_interrupt(),
             crate::peripheral_interrupts::TIMER2 => self.timer2.handle_interrupt(),

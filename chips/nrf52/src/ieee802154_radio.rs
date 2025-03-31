@@ -926,7 +926,6 @@ impl<'a> Radio<'a> {
     //
     // As a general note for the interrupt handler, event registers must still
     // be cleared even when hardware shortcuts are enabled.
-    #[inline(never)]
     #[entry_point("registers")]
     pub fn handle_interrupt(&self) {
         self.registers.take().map(|state| {
