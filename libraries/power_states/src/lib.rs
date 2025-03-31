@@ -613,7 +613,7 @@ impl Register {
                         {
                             fn #to_state_fn_name(
                                 self,
-                            ) -> RegisterResult<#register_name<#to_state>, #register_name<S>>;
+                            ) -> #register_name<#to_state>;
                         }
                     }
                     );
@@ -641,14 +641,14 @@ impl Register {
                             {
                                 fn #to_state_fn_name(
                                     self,
-                                ) -> RegisterResult<#register_name<#to_state>, #register_name<#from_state>> {
+                                ) -> #register_name<#to_state> {
                                     self.#reg_field_name.reg.write(#instruction);
 
                                     unsafe {
-                                        Ok(transmute::<
+                                        transmute::<
                                             #register_name<#from_state>,
                                             #register_name<#to_state>
-                                        >(self)).into()
+                                        >(self)
                                     }
                                 }
                             }
