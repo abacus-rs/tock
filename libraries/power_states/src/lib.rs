@@ -2,10 +2,18 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::{
-    bracketed, parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated, DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, ItemFn, PathArguments, Type, Variant, Visibility
+    bracketed,
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    punctuated::Punctuated,
+    DeriveInput, Field, FieldMutability, Fields, FieldsUnnamed, Ident, ItemFn, PathArguments, Type,
+    Variant, Visibility,
 };
 
-use std::{any::Any, collections::{hash_set::HashSet, HashMap}}; 
+use std::{
+    any::Any,
+    collections::{hash_set::HashSet, HashMap},
+};
 
 #[derive(Clone, Eq, PartialEq, Hash)]
 struct State {
@@ -31,7 +39,7 @@ impl State {
             });
 
             let args_ident = quote! {#(#args),*};
-            quote!{
+            quote! {
                 #state_ident<#args_ident>
             }
         }
@@ -45,7 +53,7 @@ impl State {
         merge_body: Vec<&State>,
         any_positions: Option<Vec<(usize, Ident)>>,
         // flag to denote if this is a shallow creation (only implement merge)
-        only_any: bool 
+        only_any: bool,
     ) -> proc_macro2::TokenStream {
         let mut result = proc_macro2::TokenStream::new();
 
@@ -54,7 +62,6 @@ impl State {
         // Form struct name / generics in carrots
         let concrete_type = self.form_concrete_state_type();
 
-        
         // Form full struct using formed name
         if self.substates.is_empty() {
             result.extend(quote! {
@@ -65,7 +72,7 @@ impl State {
 
                 impl Reg for #register_name<#struct_name> {
                     type StateEnum = #store_name;
-                
+
                 }
 
                 impl From<#register_name<#struct_name>> for #store_name {
@@ -73,7 +80,7 @@ impl State {
                         #store_name::#state_ident(reg)
                     }
                 }
-           
+
                 impl TryFrom<#store_name> for #register_name<#struct_name> {
                     type Error = (kernel::ErrorCode, #store_name);
                     fn try_from(store: #store_name) -> Result<Self, Self::Error> {
@@ -85,8 +92,7 @@ impl State {
                 }
             });
         } else {
-
-            result.extend(quote!{
+            result.extend(quote! {
                 impl State for #concrete_type {
                     type Reg = #register_name<#concrete_type>;
                     type StateEnum = #store_name;
@@ -95,13 +101,12 @@ impl State {
                 impl Reg for #register_name<#concrete_type> {
                     type StateEnum = #store_name;
                 }
-                
+
             });
 
             if any_positions.is_some() {
-
                 let states_vec = merge_body.clone();
-                let merge_body = merge_body.iter().map(|state|{
+                let merge_body = merge_body.iter().map(|state| {
                     let enum_variant = state.shortname.clone();
 
                     if is_mergeable(self, state) {
@@ -132,10 +137,10 @@ impl State {
                     }
                 });
 
-                    result.extend(quote! {
+                result.extend(quote! {
                         impl Merge<#store_name> for #register_name<#concrete_type> {
                             type Output = Result<#store_name, #store_name>;
-                            
+
                             fn merge(self, other: #store_name) -> Self::Output {
                                 match other {
                                     #(#merge_body),*
@@ -161,7 +166,7 @@ impl State {
                         }
                 });
             } else {
-                result.extend(quote!{
+                result.extend(quote! {
                     impl From<#register_name<#concrete_type>> for #store_name {
                       fn from(reg: #register_name<#concrete_type>) -> Self {
                           #store_name::#struct_shortname(reg)
@@ -180,7 +185,7 @@ impl State {
                 });
             }
         }
-        
+
         result
     }
 }
@@ -254,7 +259,7 @@ impl RegisterType {
             RegisterType::WriteOnly => format_ident!("WriteOnly"),
             RegisterType::ReadWrite => format_ident!("ReadWrite"),
             RegisterType::StateChange(_, _, _) => format_ident!("StateChange"),
-            RegisterType::StateChangeRW => format_ident!("StateChange")
+            RegisterType::StateChangeRW => format_ident!("StateChange"),
         }
     }
 }
@@ -276,20 +281,26 @@ impl Parse for RegisterType {
 
                 let instruction = content.parse::<syn::Path>().expect("registertype 2");
 
-            
                 if new_state.substates.is_empty() {
                     let state_shortname = new_state.ident.clone();
-                    return Ok(RegisterType::StateChange(new_state, instruction, state_shortname));
+                    return Ok(RegisterType::StateChange(
+                        new_state,
+                        instruction,
+                        state_shortname,
+                    ));
                 } else {
-                    let _: syn::Token![,] = content.parse().expect("final comma in register state change");
+                    let _: syn::Token![,] = content
+                        .parse()
+                        .expect("final comma in register state change");
                     let state_shortname = content.parse::<syn::Ident>().expect("registertype 3");
-                    return Ok(RegisterType::StateChange(new_state, instruction, state_shortname))
-                } 
-
+                    return Ok(RegisterType::StateChange(
+                        new_state,
+                        instruction,
+                        state_shortname,
+                    ));
+                }
             }
-            x => {
-                Err(syn::Error::new(ident.span(), "Unknown register type"))
-            }
+            x => Err(syn::Error::new(ident.span(), "Unknown register type")),
         }
     }
 }
@@ -311,12 +322,22 @@ impl Register {
         // impl ReadWriteRegister<#register_bitwidth, #register_shortname, #type_name, #validstate> {
         let register_bitwidth = self.register_bitwidth.clone();
         let register_shortname = self.register_shortname.clone();
-        let validstate = self.valid_states.first().expect("generate reg op bindings").form_concrete_state_type();
+        let validstate = self
+            .valid_states
+            .first()
+            .expect("generate reg op bindings")
+            .form_concrete_state_type();
 
         // Determine if this state contains an Any substate.
-        let is_anytype = self.valid_states.first().unwrap().substates.iter().any(|substate| substate.to_string() == "Any");
-        
-        // An Any substate means an state is valid. To mock up this behavior in the 
+        let is_anytype = self
+            .valid_states
+            .first()
+            .unwrap()
+            .substates
+            .iter()
+            .any(|substate| substate.to_string() == "Any");
+
+        // An Any substate means an state is valid. To mock up this behavior in the
         // type system, we must replace the Any substate with a generic type.
         let map_any = |mut state: State, generic_seed: String| {
             // For any substate that is Any, replace with generic T.
@@ -327,7 +348,7 @@ impl Register {
                 )
             };
 
-            // These substates may be different, so we need to make distinct 
+            // These substates may be different, so we need to make distinct
             // generics.
             let mut count = 0;
             for substate in state.substates.iter_mut() {
@@ -344,29 +365,34 @@ impl Register {
                 generic
             });
 
-            let generic_params_constrained: Vec<_> = (0..count).map(|index| {
-                let generic = format_ident!("{}{}", generic_seed, index.to_string());
-                form_generic(generic)
-            }).collect();
+            let generic_params_constrained: Vec<_> = (0..count)
+                .map(|index| {
+                    let generic = format_ident!("{}{}", generic_seed, index.to_string());
+                    form_generic(generic)
+                })
+                .collect();
 
             let generic_tokens = quote! {
                 #(#generic_params),*
             };
 
-
-            (state.form_concrete_state_type(), generic_tokens, generic_params_constrained)
-
+            (
+                state.form_concrete_state_type(),
+                generic_tokens,
+                generic_params_constrained,
+            )
         };
 
-        // FIXME: This only accounts for the first state. We need to account for all states.in the 
-        // valid states. StateChangeRegister currently does this, but all register types should.  
+        // FIXME: This only accounts for the first state. We need to account for all states.in the
+        // valid states. StateChangeRegister currently does this, but all register types should.
         match &self.register_type {
             RegisterType::ReadOnly => {
                 if is_anytype {
-                    let (state_ident, generic_tokens, generic_tokens_constrained) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"}); 
+                    let (state_ident, generic_tokens, generic_tokens_constrained) =
+                        map_any(self.valid_states.first().unwrap().clone(), format! {"T"});
                     quote! {
                         impl <#generic_tokens> ReadOnlyRegister<#register_bitwidth, #register_shortname, #state_ident>
-                        where 
+                        where
                             #state_ident: State,
                             #(#generic_tokens_constrained),*
                         {
@@ -385,7 +411,7 @@ impl Register {
                             pub fn get(&self) -> #register_bitwidth {
                                 self.reg.get()
                             }
-                            
+
                             pub fn read(&self, field: Field<#register_bitwidth, #register_shortname>) -> #register_bitwidth {
                                 self.reg.read(field)
                             }
@@ -395,10 +421,11 @@ impl Register {
             }
             RegisterType::WriteOnly => {
                 if is_anytype {
-                   let (state_ident, generic_tokens, generic_tokens_constrained) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
+                    let (state_ident, generic_tokens, generic_tokens_constrained) =
+                        map_any(self.valid_states.first().unwrap().clone(), format! {"T"});
                     quote! {
                         impl <#generic_tokens> WriteOnlyRegister<#register_bitwidth, #register_shortname, #state_ident>
-                        where 
+                        where
                             #state_ident: State,
                             #(#generic_tokens_constrained),*
                         {
@@ -410,7 +437,7 @@ impl Register {
                                 self.reg.write(value)
                             }
                         }
-                    }  
+                    }
                 } else {
                     quote! {
                         impl WriteOnlyRegister<#register_bitwidth, #register_shortname, #validstate> {
@@ -421,9 +448,9 @@ impl Register {
                             pub fn write(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
                                 self.reg.write(value)
                             }
-                            
-                            pub fn modify_no_read(&self, 
-                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>, 
+
+                            pub fn modify_no_read(&self,
+                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>,
                                 value: FieldValue<#register_bitwidth, #register_shortname>) {
                                     self.reg.modify_no_read(original, value)
                             }
@@ -433,10 +460,11 @@ impl Register {
             }
             RegisterType::ReadWrite => {
                 if is_anytype {
-                    let (state_ident, generic_tokens, generic_tokens_constrained) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
+                    let (state_ident, generic_tokens, generic_tokens_constrained) =
+                        map_any(self.valid_states.first().unwrap().clone(), format! {"T"});
                     quote! {
                         impl <#generic_tokens> ReadWriteRegister<#register_bitwidth, #register_shortname, #state_ident>
-                        where 
+                        where
                             #state_ident: State,
                             #(#generic_tokens_constrained),*
                         {
@@ -454,17 +482,17 @@ impl Register {
                             pub fn is_set(&self, field: Field<#register_bitwidth, #register_shortname>) -> bool {
                                 self.reg.is_set(field)
                             }
-                            
+
                             pub fn modify(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
                                 self.reg.modify(value)
                             }
-                            
-                            pub fn modify_no_read(&self, 
-                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>, 
+
+                            pub fn modify_no_read(&self,
+                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>,
                                 value: FieldValue<#register_bitwidth, #register_shortname>) {
                                     self.reg.modify_no_read(original, value)
                             }
-                            
+
                             pub fn read(&self, field: Field<#register_bitwidth, #register_shortname>) -> #register_bitwidth {
                                 self.reg.read(field)
                             }
@@ -490,13 +518,13 @@ impl Register {
                             pub fn modify(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
                                 self.reg.modify(value)
                             }
-                            
-                            pub fn modify_no_read(&self, 
-                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>, 
+
+                            pub fn modify_no_read(&self,
+                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>,
                                 value: FieldValue<#register_bitwidth, #register_shortname>) {
                                     self.reg.modify_no_read(original, value)
                             }
-                            
+
                             pub fn read(&self, field: Field<#register_bitwidth, #register_shortname>) -> #register_bitwidth {
                                 self.reg.read(field)
                             }
@@ -506,10 +534,11 @@ impl Register {
             }
             RegisterType::StateChangeRW => {
                 if is_anytype {
-                    let (state_ident, generic_tokens, generic_tokens_constrained) = map_any(self.valid_states.first().unwrap().clone(), format!{"T"});
+                    let (state_ident, generic_tokens, generic_tokens_constrained) =
+                        map_any(self.valid_states.first().unwrap().clone(), format! {"T"});
                     quote! {
                         impl <#generic_tokens> StateChangeRegister<#register_bitwidth, #register_shortname, #state_ident>
-                        where 
+                        where
                             #state_ident: State,
                             #(#generic_tokens_constrained),*
                         {
@@ -527,17 +556,17 @@ impl Register {
                             pub fn is_set(&self, field: Field<#register_bitwidth, #register_shortname>) -> bool {
                                 self.reg.is_set(field)
                             }
-                            
+
                             pub fn modify(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
                                 self.reg.modify(value)
                             }
-                            
-                            pub fn modify_no_read(&self, 
-                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>, 
+
+                            pub fn modify_no_read(&self,
+                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>,
                                 value: FieldValue<#register_bitwidth, #register_shortname>) {
                                     self.reg.modify_no_read(original, value)
                             }
-                            
+
                             pub fn read(&self, field: Field<#register_bitwidth, #register_shortname>) -> #register_bitwidth {
                                 self.reg.read(field)
                             }
@@ -563,13 +592,13 @@ impl Register {
                             pub fn modify(&self, value: FieldValue<#register_bitwidth, #register_shortname>) {
                                 self.reg.modify(value)
                             }
-                            
-                            pub fn modify_no_read(&self, 
-                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>, 
+
+                            pub fn modify_no_read(&self,
+                                original: LocalRegisterCopy<#register_bitwidth, #register_shortname>,
                                 value: FieldValue<#register_bitwidth, #register_shortname>) {
                                     self.reg.modify_no_read(original, value)
                             }
-                            
+
                             pub fn read(&self, field: Field<#register_bitwidth, #register_shortname>) -> #register_bitwidth {
                                 self.reg.read(field)
                             }
@@ -583,17 +612,16 @@ impl Register {
                 let reg_field_name = self.name.clone();
                 let trait_name = format_ident!("Step{}", state_shortname);
 
-
                 let to_state_fn_name =
                     format_ident!("into_{}", state_shortname.to_string().to_lowercase());
 
                 if is_anytype {
                     // Create copy of state to change
                     let state = state.clone();
-                    let (to_state, to_state_generics, to_state_generics_constrained) = map_any(state, "T".to_string());
+                    let (to_state, to_state_generics, to_state_generics_constrained) =
+                        map_any(state, "T".to_string());
 
-                    
-                    // TODO: This is just a marker that we have an issue here. We will need to update 
+                    // TODO: This is just a marker that we have an issue here. We will need to update
                     // <impl T: SubState> to have more generics than T / F for more complex peripherals.
 
                     let carrot_block = if to_state_generics_constrained.is_empty() {
@@ -604,7 +632,7 @@ impl Register {
 
                     state_change_output.extend(quote! {
                         trait #trait_name<#carrot_block>: Sized
-                        where 
+                        where
                             #to_state: State,
                             S: State,
                             #register_name<#to_state>: Reg,
@@ -615,19 +643,21 @@ impl Register {
                                 self,
                             ) -> #register_name<#to_state>;
                         }
-                    }
-                    );
+                    });
 
                     for state in &self.valid_states {
+                        let (from_state, from_state_generics, from_state_generics_constrained) =
+                            map_any(state.clone(), "T".to_string());
 
-                        let (from_state, from_state_generics, from_state_generics_constrained) = map_any(state.clone(), "T".to_string());
-
-                        let constraints = merge_constraint_vec(to_state_generics_constrained.clone(), from_state_generics_constrained); 
+                        let constraints = merge_constraint_vec(
+                            to_state_generics_constrained.clone(),
+                            from_state_generics_constrained,
+                        );
 
                         let carrot_block = if to_state_generics.to_string() == "" {
-                            quote!{#from_state}
+                            quote! {#from_state}
                         } else {
-                            quote!{#to_state_generics, #from_state}
+                            quote! {#to_state_generics, #from_state}
                         };
 
                         state_change_output.extend(quote!{
@@ -654,14 +684,14 @@ impl Register {
                             }
                         })
                     }
-                    
+
                     state_change_output
-                } else { 
+                } else {
                     let to_state = state.form_concrete_state_type();
-                    
+
                     state_change_output.extend(quote! {
-                        trait #trait_name<S: State>: Sized 
-                        where 
+                        trait #trait_name<S: State>: Sized
+                        where
                             #register_name<S>: Reg
                         {
                             fn #to_state_fn_name(
@@ -673,7 +703,7 @@ impl Register {
                     for state in &self.valid_states {
                         let from_state = state.form_concrete_state_type();
 
-                        state_change_output.extend(quote!{
+                        state_change_output.extend(quote! {
                             impl #trait_name<#from_state> for #register_name<#from_state> {
                                 fn #to_state_fn_name(
                                     self,
@@ -688,14 +718,13 @@ impl Register {
                                     }
                                 }
                             }
-                        }
-                    );
-                }
+                        });
+                    }
 
-                state_change_output
+                    state_change_output
+                }
             }
         }
-    }
     }
 }
 
@@ -729,7 +758,7 @@ struct MacroInput {
 }
 
 impl MacroInput {
-    // Gives two returns, the body for the impl Merge<Store> for XXX and 
+    // Gives two returns, the body for the impl Merge<Store> for XXX and
     // the enum store.
     fn generate_state_store(
         &self,
@@ -740,19 +769,23 @@ impl MacroInput {
 
         // Gather substates to be used for creating type.
         let substate_iter = |state: State| {
-            state.substates.iter().map(|substate| {
-                quote! {
-                    #substate
-                }
-            }).collect::<Vec<_>>()
+            state
+                .substates
+                .iter()
+                .map(|substate| {
+                    quote! {
+                        #substate
+                    }
+                })
+                .collect::<Vec<_>>()
         };
-        
+
         let substate_tokens = |state: State| {
             let state_ident = state.ident.clone();
             if state.substates.is_empty() {
                 quote! {
-                    #state_ident
-            }
+                        #state_ident
+                }
             } else {
                 let substate_iter = substate_iter(state.clone());
                 quote! {
@@ -794,9 +827,8 @@ impl MacroInput {
         //     Reading(Nrf5xTempRegister<state_ident>),
         // }
 
-
-          //Nrf5xTemperatureStore::Reading(_reg) => {
-          //      Nrf5xTemperatureStore::Reading(Nrf5xTempRegister::<Reading>::new())
+        //Nrf5xTemperatureStore::Reading(_reg) => {
+        //      Nrf5xTemperatureStore::Reading(Nrf5xTempRegister::<Reading>::new())
         // }
         // Generate StateEnum trait implementation
         let state_enum_impl = self.states.iter().map(|state| {
@@ -862,8 +894,8 @@ impl MacroInput {
         store_name: &Ident,
     ) -> (proc_macro2::TokenStream, HashMap<String, State>) {
         let mut output = proc_macro2::TokenStream::new();
-        
-        // The other state hashes include the substates. This is strictly 
+
+        // The other state hashes include the substates. This is strictly
         // looking at the State name
         let mut strict_state_hash = HashSet::new();
 
@@ -880,21 +912,19 @@ impl MacroInput {
         for state in &self.states {
             if !strict_state_hash.contains(state.ident.to_string().as_str()) {
                 let state_ident = state.ident.clone();
-                if state.substates.is_empty(){
-                    output.extend(
-                        quote!{
-                            impl <A1> Merge<#register_name<A1>> for #register_name<#state_ident>
-                            where 
-                                #state_ident: State,
-                                A1: State,
-                            {
-                                type Output = #register_name<#state_ident>;
-                                fn merge(self, _other: #register_name<A1>) -> Self::Output {
-                                    self
-                                }
-                            } 
+                if state.substates.is_empty() {
+                    output.extend(quote! {
+                        impl <A1> Merge<#register_name<A1>> for #register_name<#state_ident>
+                        where
+                            #state_ident: State,
+                            A1: State,
+                        {
+                            type Output = #register_name<#state_ident>;
+                            fn merge(self, _other: #register_name<A1>) -> Self::Output {
+                                self
+                            }
                         }
-                    );
+                    });
                 } else if state.substates.len() == 1 {
                     output.extend(
                         quote!{
@@ -969,10 +999,10 @@ impl MacroInput {
             // TODO: We need to add logic for if there are 3 substates (e.g. <Any, Any, Tx>)
             for iter in 0..(&state.substates.len() + 2) {
                 let mut any_positions: Option<Vec<(usize, Ident)>> = None;
-            
+
                 state.substates = original_substates.clone();
-                
-                // Case (2) 
+
+                // Case (2)
                 if iter < state.substates.len() {
                     any_positions = Some(vec![(iter, state.substates[iter].clone())]);
                     state.substates[iter] = format_ident!("Any");
@@ -987,9 +1017,11 @@ impl MacroInput {
                     }
 
                     any_positions = Some(vec);
-                    state.substates.iter_mut().for_each(|substate| *substate = format_ident!("Any"));
-                    
-                }                
+                    state
+                        .substates
+                        .iter_mut()
+                        .for_each(|substate| *substate = format_ident!("Any"));
+                }
 
                 let state_ident = state.ident.clone();
 
@@ -1013,7 +1045,7 @@ impl MacroInput {
                         #state_ident<#(#generic_params),*>
                     }
                 };
-       
+
                 let fields = state.substates.iter().enumerate().map(|(index, _)| {
                     let field_name = format!("associated_{}", index);
                     let generic_name = format!("T{}", index);
@@ -1031,30 +1063,34 @@ impl MacroInput {
                 if state_hash.contains(&concrete_state_str) {
                     // if any_positions.is_some() {
                     //     output.extend(state.generate_state(register_name, store_name, &struct_name, all_states_vec.clone(), any_positions, true));
-                    // } 
-                        continue; // Skip creating this state, as it has already been created.
+                    // }
+                    continue; // Skip creating this state, as it has already been created.
                 } else {
                     state_hash.insert(concrete_state_str.clone());
                 }
 
                 if !created_states.contains(&state.ident) {
-                    output.extend(
-                        quote!{
-                            pub struct #struct_name {
-                                #(#fields),*
-                            }
+                    output.extend(quote! {
+                        pub struct #struct_name {
+                            #(#fields),*
                         }
-                    );
-                    
+                    });
+
                     created_states.insert(state.ident.clone());
                 }
-                
-                
-                output.extend(state.generate_state(register_name, store_name, &struct_name, all_states_vec.clone(), any_positions, false));
+
+                output.extend(state.generate_state(
+                    register_name,
+                    store_name,
+                    &struct_name,
+                    all_states_vec.clone(),
+                    any_positions,
+                    false,
+                ));
             }
         }
 
-        // create substates 
+        // create substates
         for substate in unique_substates {
             let substate_ident = format_ident!("{}", substate);
             let any_trait = if "Any" == substate_ident.to_string() {
@@ -1062,7 +1098,7 @@ impl MacroInput {
                     impl AnySubState for #substate_ident {}
                 }
             } else {
-                quote!{
+                quote! {
                     impl ConcreteSubState for #substate_ident {}
                 }
             };
@@ -1112,13 +1148,16 @@ impl MacroInput {
 fn add_imports() -> proc_macro2::TokenStream {
     quote!(
         use kernel::power_manager::{
-            Peripheral, State, SubState, StateEnum, Reg, Store, PowerManager,
-            PowerError, Merge, AnyReg, SyncState, AnySubState, ConcreteSubState, MergeSubState
+            Peripheral, State, SubState, StateEnum, Reg, Store, PowerManager, PowerError, Merge,
+            AnyReg, SyncState, AnySubState, ConcreteSubState, MergeSubState,
         };
         use core::marker::PhantomData;
         use core::mem::transmute;
         use core::ops::Deref;
-        use kernel::utilities::registers::{FieldValue, UIntLike, RegisterLongName, Field, LocalRegisterCopy, interfaces::ReadWriteable};
+        use kernel::utilities::registers::{
+            FieldValue, UIntLike, RegisterLongName, Field, LocalRegisterCopy,
+            interfaces::ReadWriteable,
+        };
     )
 }
 
@@ -1126,20 +1165,21 @@ impl Parse for MacroInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let _: custom_keywords::peripheral_name = input.parse().expect("macinput err");
         let _: syn::Token![=] = input.parse().expect("macinput err");
-        let peripheral_name: syn::LitStr = input.parse().expect("macinput err");        ;
+        let peripheral_name: syn::LitStr = input.parse().expect("macinput err");
         let _: syn::Token![,] = input.parse().expect("macinput err");
 
         let _: custom_keywords::register_base_addr = input.parse().expect("macinput err");
         let _: syn::Token![=] = input.parse().expect("macinput err");
-        let base_addr: syn::LitInt  = input.parse().expect("error with base addr");
+        let base_addr: syn::LitInt = input.parse().expect("error with base addr");
         let _: syn::Token![,] = input.parse().expect("macinput err");
 
         let _: custom_keywords::states = input.parse().expect("macinput err");
         let _: syn::Token![=] = input.parse().expect("macinput err");
         let states_content;
         let _: syn::token::Bracket = bracketed!(states_content in input);
-        let states: Punctuated<State, syn::Token![,]> =
-            states_content.parse_terminated(State::parse, syn::Token![,]).expect("macinput err");
+        let states: Punctuated<State, syn::Token![,]> = states_content
+            .parse_terminated(State::parse, syn::Token![,])
+            .expect("macinput err");
 
         Ok(MacroInput {
             peripheral_name: peripheral_name.value(),
@@ -1161,10 +1201,10 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
 
     let mut result = add_imports();
 
-    let base_addr = parsed_input.base_addr.clone(); 
+    let base_addr = parsed_input.base_addr.clone();
     // IN REGARDS TO THE NEW METHOD BELOW:
     // The existence of this method destroys all guarantees. We need this
-    // to store the anytype, but need to do this in a controlled way so that 
+    // to store the anytype, but need to do this in a controlled way so that
     // we don't allow anyone to "escape" the power manager.
     let block = quote! {
         pub struct #register<S: kernel::power_manager::State> {
@@ -1191,11 +1231,10 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     // Generate store enum
     let state_enum = parsed_input.generate_state_store(&register, &store);
     result.extend(state_enum);
-    
+
     // Generate states
     let (states_generated, state_map) = parsed_input.generate_states(&register, &store);
     result.extend(states_generated);
-
 
     result.extend(quote! {
         pub struct #peripheral {}
@@ -1208,7 +1247,6 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     });
 
     // result.extend(parsed_input.generate_disjunctive_states());
-
 
     let ast: DeriveInput = syn::parse(item).expect("ast unwrap");
 
@@ -1352,7 +1390,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
         let new_binding = reg.generate_register_op_bindings(&peripheral, &register);
         if generated_bindings_set.insert(new_binding.clone().to_string()) {
             result.extend(new_binding.clone());
-        } 
+        }
     }
 
     // FIX ME
@@ -1421,7 +1459,7 @@ pub fn process_register_block(attr: TokenStream, item: TokenStream) -> TokenStre
     result.into()
 }
 
-// This is a helper function to determine if two states are mergable. 
+// This is a helper function to determine if two states are mergable.
 fn is_mergeable(state1: &State, state2: &State) -> bool {
     // Given 2 reg types, determine if they are mergeable
 
@@ -1430,7 +1468,7 @@ fn is_mergeable(state1: &State, state2: &State) -> bool {
         return false;
     }
 
-    // For every substate, the substates may only be different if 
+    // For every substate, the substates may only be different if
     // one of the substates is ANY.
     // for (substate1, substate2) in state1.substates.iter().zip(state2.substates.iter()) {
     //     if substate1 != substate2 {
@@ -1440,11 +1478,11 @@ fn is_mergeable(state1: &State, state2: &State) -> bool {
     //     }
     // }
 
-    return true
+    return true;
 }
 
-// This is a helper function to determine if a state is valid to coerce into another 
-// for usage with try_into (e.g. Active<Any, Tx> => Active<Rx, Tx>). 
+// This is a helper function to determine if a state is valid to coerce into another
+// for usage with try_into (e.g. Active<Any, Tx> => Active<Rx, Tx>).
 fn is_valid_into(state1: &State, state2: &State) -> bool {
     // Given 2 reg types, determine if they are mergeable
 
@@ -1453,7 +1491,7 @@ fn is_valid_into(state1: &State, state2: &State) -> bool {
         return false;
     }
 
-    // For every substate, the substates may only be different if 
+    // For every substate, the substates may only be different if
     // one of the substates is ANY.
     for (substate1, substate2) in state1.substates.iter().zip(state2.substates.iter()) {
         if substate1 != substate2 {
@@ -1463,10 +1501,10 @@ fn is_valid_into(state1: &State, state2: &State) -> bool {
         }
     }
 
-    return true
+    return true;
 }
 #[proc_macro_attribute]
-pub fn entry_point(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn entry_point(attr: TokenStream, item: TokenStream) -> TokenStream {
     // This is only valid to be placed upon functions.
     let ast: ItemFn = syn::parse(item).expect("entry point unwrap");
 
@@ -1474,10 +1512,14 @@ pub fn entry_point(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let function_block = &ast.block.stmts;
     let function_vis = &ast.vis;
 
+    // Get field of register struct provided as #[entry_point(NAME)]
+    let entry_point_name = parse_macro_input!(attr as syn::LitStr).value();
+    let reg_field_ident = format_ident!("{}", entry_point_name);
+
     // We expect this to be a member function of the struct that contains
     // the power manager. (TODO: rethink this assumption)
     let check_interrupts_shim = quote! {
-        self.power_manager.sync_state();
+        self.#reg_field_ident.take().map(|state| self.#reg_field_ident.replace(state.sync_state()));
     };
 
     // Prepend check_interrupts_shim to body of fn.
@@ -1486,11 +1528,14 @@ pub fn entry_point(_attr: TokenStream, item: TokenStream) -> TokenStream {
             #check_interrupts_shim
             #(#function_block)*
         }
-    }.into()
-
+    }
+    .into()
 }
 
-fn merge_constraint_vec(vec1: Vec<proc_macro2::TokenStream>, vec2: Vec<proc_macro2::TokenStream>) -> Vec<proc_macro2::TokenStream> {
+fn merge_constraint_vec(
+    vec1: Vec<proc_macro2::TokenStream>,
+    vec2: Vec<proc_macro2::TokenStream>,
+) -> Vec<proc_macro2::TokenStream> {
     let mut added: HashSet<_> = HashSet::new();
     for item in vec1.clone() {
         added.insert(item.clone().to_string());

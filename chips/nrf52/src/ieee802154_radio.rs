@@ -65,8 +65,10 @@
 
 use crate::timer::TimerAlarm;
 use core::cell::Cell;
+use cortexm4f::dwt;
 use cortexm4f::support::wfi;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
+use kernel::hil::hw_debug::CycleCounter;
 use kernel::hil::radio::{self, PowerClient, RadioChannel, RadioConfig, RadioData};
 use kernel::hil::time::{Alarm, AlarmClient, Time};
 use kernel::utilities::cells::{OptionalCell, TakeCell};
@@ -75,8 +77,6 @@ use kernel::utilities::registers::{self, register_bitfields, ReadOnly, ReadWrite
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 use power_states::{entry_point, process_register_block};
-use cortexm4f::dwt;
-use kernel::hil::hw_debug::CycleCounter;
 
 use crate::constants::TxPower;
 
@@ -169,25 +169,31 @@ impl SyncState for Nrf52RadioRegisters<On<Transient>> {
         // TX = 11,
         // TXDISABLED = 12
         /////////////////////////////
-        
-        match state { 
-            0 => { Nrf52RadioStore::Disabled( unsafe { transmute::<Self, Nrf52RadioRegisters<On<Disabled>>>(self) })},
+
+        match state {
+            0 => Nrf52RadioStore::Disabled(unsafe {
+                transmute::<Self, Nrf52RadioRegisters<On<Disabled>>>(self)
+            }),
             1 => Nrf52RadioStore::Transient(self),
-            2 => { Nrf52RadioStore::RxIdle( unsafe { transmute::<Self, Nrf52RadioRegisters<On<RxIdle>>>(self) })},
+            2 => Nrf52RadioStore::RxIdle(unsafe {
+                transmute::<Self, Nrf52RadioRegisters<On<RxIdle>>>(self)
+            }),
             3 => Nrf52RadioStore::Transient(self),
             4 => Nrf52RadioStore::Transient(self),
             9 => Nrf52RadioStore::Transient(self),
-            10 => { Nrf52RadioStore::TxIdle( unsafe { transmute::<Self, Nrf52RadioRegisters<On<TxIdle>>>(self) })},
+            10 => Nrf52RadioStore::TxIdle(unsafe {
+                transmute::<Self, Nrf52RadioRegisters<On<TxIdle>>>(self)
+            }),
             11 => Nrf52RadioStore::Transient(self),
             12 => Nrf52RadioStore::Transient(self),
-            _ => unimplemented!(),    
+            _ => unimplemented!(),
         }
     }
 }
 
 // SHORTCUTS: CCAIDLE -> TXEN
 
-//            
+//
 //                  RxIdle ==> RX
 //                /   |
 // OFF => DISABLED    |
@@ -337,7 +343,7 @@ struct RadioRegisters {
     packetptr: ReadWrite<u32, PacketPointer::Register>,
     /// Frequency
     /// - Address: 0x508 - 0x50c
-     // #[RegAttributes([On(Any)], ReadWrite)]
+    // #[RegAttributes([On(Any)], ReadWrite)]
     frequency: ReadWrite<u32, Frequency::Register>,
     /// Output power
     /// - Address: 0x50c - 0x510
@@ -823,13 +829,12 @@ pub struct Radio<'a> {
 
 impl<'a> AlarmClient for Radio<'a> {
     fn alarm(&self) {
-        self.registers.take().map(|state|{
+        self.registers.take().map(|state| {
             if let Nrf52RadioStore::RxIdle(reg) = state {
                 self.registers.replace(reg.into_ccastart().into());
             } else {
                 self.registers.replace(state);
             }
-
         });
     }
 }
@@ -856,9 +861,7 @@ impl<'a> Radio<'a> {
             state: Cell::new(RadioState::OFF),
             deferred_call: DeferredCall::new(),
             deferred_call_operation: OptionalCell::empty(),
-            registers: OptionalCell::new(
-                Nrf52RadioStore::Off(Nrf52RadioRegisters::<Off>::new())
-            ),
+            registers: OptionalCell::new(Nrf52RadioStore::Off(Nrf52RadioRegisters::<Off>::new())),
         }
     }
 
@@ -867,19 +870,21 @@ impl<'a> Radio<'a> {
     }
 
     /// This must not be called within use_power_expecting
-    pub fn is_enabled(&self) -> bool
-    {
-        self.registers.take().map(|state|{
-            let res = match state {
-                Nrf52RadioStore::Off(_) => false,
-                Nrf52RadioStore::Disabled(_) => false,
-                _ => true
-            };
+    pub fn is_enabled(&self) -> bool {
+        self.registers
+            .take()
+            .map(|state| {
+                let res = match state {
+                    Nrf52RadioStore::Off(_) => false,
+                    Nrf52RadioStore::Disabled(_) => false,
+                    _ => true,
+                };
 
-            self.registers.replace(state);
+                self.registers.replace(state);
 
-            res
-        }).map_or_else(|| false, |res| res)
+                res
+            })
+            .map_or_else(|| false, |res| res)
     }
 
     fn radio_on(&self, registers: Nrf52RadioRegisters<Off>) -> Nrf52RadioRegisters<On<Disabled>> {
@@ -887,7 +892,7 @@ impl<'a> Radio<'a> {
     }
 
     fn radio_off(&self, registers: Nrf52RadioRegisters<On<Disabled>>) -> Nrf52RadioRegisters<Off> {
-        registers.into_off() 
+        registers.into_off()
     }
 
     fn set_dma_ptr<S>(
@@ -922,8 +927,10 @@ impl<'a> Radio<'a> {
     // As a general note for the interrupt handler, event registers must still
     // be cleared even when hardware shortcuts are enabled.
     #[inline(never)]
+    #[entry_point("registers")]
     pub fn handle_interrupt(&self) {
         self.registers.take().map(|state| {
+
             // Disable Interrupts
             match &state {
                 Nrf52RadioStore::Off(_) => {}
@@ -1217,8 +1224,7 @@ impl<'a> Radio<'a> {
                     } else {
                         reg.into()
                     }
-                
-                }
+                                }
                 Nrf52RadioStore::Transient(reg) => {
                     // Do nothing.
                     reg.into()
@@ -1230,36 +1236,38 @@ impl<'a> Radio<'a> {
                 Nrf52RadioStore::Off(_) => {
                     // No interrupts to enable when radio is off.
                 }
-                Nrf52RadioStore::Disabled(reg) =>                     self.enable_interrupts(&reg),
-                Nrf52RadioStore::RxIdle(reg) =>                    self.enable_interrupts(&reg),
-                Nrf52RadioStore::TxIdle(reg) =>                     self.enable_interrupts(&reg),
-                Nrf52RadioStore::Transient(reg) =>                   self.enable_interrupts(&reg),
+                Nrf52RadioStore::Disabled(reg) => self.enable_interrupts(&reg),
+                Nrf52RadioStore::RxIdle(reg) => self.enable_interrupts(&reg),
+                Nrf52RadioStore::TxIdle(reg) => self.enable_interrupts(&reg),
+                Nrf52RadioStore::Transient(reg) => self.enable_interrupts(&reg),
             };
 
             self.registers.replace(new_state);
         });
-
     }
 
     pub fn enable_interrupts<S>(&self, registers: &Nrf52RadioRegisters<On<S>>)
-    where 
+    where
         On<S>: State,
         S: SubState,
     {
-        registers
-            .intenset
-            .write(Interrupt::READY::SET + Interrupt::CCABUSY::SET + Interrupt::END::SET + Interrupt::DISABLED::SET);
+        registers.intenset.write(
+            Interrupt::READY::SET
+                + Interrupt::CCABUSY::SET
+                + Interrupt::END::SET
+                + Interrupt::DISABLED::SET,
+        );
     }
 
     pub fn enable_interrupt<S>(&self, intr: u32, registers: &Nrf52RadioRegisters<On<S>>)
-    where 
+    where
         On<S>: State,
         S: SubState,
     {
         registers.intenset.set(intr);
     }
 
-    pub fn clear_interrupt<S>(&self, intr: u32, registers: &Nrf52RadioRegisters<On<S>>) 
+    pub fn clear_interrupt<S>(&self, intr: u32, registers: &Nrf52RadioRegisters<On<S>>)
     where
         On<S>: State,
         S: SubState,
@@ -1285,7 +1293,7 @@ impl<'a> Radio<'a> {
         // - RX to TXRU state upon internal receipt CCA completion event
         //   (clear to begin transmitting)
         registers.shorts.write(Shortcut::CCAIDLE_TXEN::SET);
-        
+
         // CONFIGURE RADIO //
         self.ieee802154_set_channel_rate(&registers);
 
@@ -1323,7 +1331,7 @@ impl<'a> Radio<'a> {
     }
 
     fn ieee802154_set_rampup_mode<S>(&self, registers: &Nrf52RadioRegisters<On<S>>)
-    where 
+    where
         On<S>: State,
         S: SubState,
     {
@@ -1333,7 +1341,7 @@ impl<'a> Radio<'a> {
     }
 
     fn ieee802154_set_cca_config<S>(&self, registers: &Nrf52RadioRegisters<On<S>>)
-    where 
+    where
         On<S>: State,
         S: SubState,
     {
@@ -1347,8 +1355,8 @@ impl<'a> Radio<'a> {
 
     // Packet configuration
     // Settings taken from RiotOS nrf52840 15.4 driver
-    fn ieee802154_set_packet_config<S>(&self, registers: &Nrf52RadioRegisters<On<S>>) 
-    where 
+    fn ieee802154_set_packet_config<S>(&self, registers: &Nrf52RadioRegisters<On<S>>)
+    where
         On<S>: State,
         S: SubState,
     {
@@ -1364,15 +1372,15 @@ impl<'a> Radio<'a> {
     }
 
     fn ieee802154_set_channel_rate<S>(&self, registers: &Nrf52RadioRegisters<On<S>>)
-    where 
+    where
         On<S>: State,
         S: SubState,
     {
         registers.mode.write(Mode::MODE::IEEE802154_250KBIT);
     }
 
-    fn ieee802154_set_channel_freq<S>(&self, registers: &Nrf52RadioRegisters<On<S>>) 
-    where 
+    fn ieee802154_set_channel_freq<S>(&self, registers: &Nrf52RadioRegisters<On<S>>)
+    where
         On<S>: State,
         S: SubState,
     {
@@ -1382,8 +1390,8 @@ impl<'a> Radio<'a> {
             .write(Frequency::FREQUENCY.val(channel as u32));
     }
 
-    fn ieee802154_set_tx_power<S>(&self, registers: &Nrf52RadioRegisters<On<S>>) 
-    where 
+    fn ieee802154_set_tx_power<S>(&self, registers: &Nrf52RadioRegisters<On<S>>)
+    where
         On<S>: State,
         S: SubState,
     {
@@ -1410,7 +1418,19 @@ impl<'a> Radio<'a> {
         self.random_nonce.get()
     }
 
-    fn send_ack(&self, ack_buf: &'static mut [u8], frame_len: usize, registers: Nrf52RadioRegisters<On<RxIdle>>) -> Result<Nrf52RadioRegisters<On<Transient>>, (ErrorCode, &'static mut [u8], Nrf52RadioRegisters<On<RxIdle>>)>{
+    fn send_ack(
+        &self,
+        ack_buf: &'static mut [u8],
+        frame_len: usize,
+        registers: Nrf52RadioRegisters<On<RxIdle>>,
+    ) -> Result<
+        Nrf52RadioRegisters<On<Transient>>,
+        (
+            ErrorCode,
+            &'static mut [u8],
+            Nrf52RadioRegisters<On<RxIdle>>,
+        ),
+    > {
         self.state.set(RadioState::ACK);
         if ack_buf.len() < radio::PSDU_OFFSET + frame_len + radio::MFR_SIZE {
             // Not enough room for CRC or PHR or reserved byte
@@ -1419,13 +1439,16 @@ impl<'a> Radio<'a> {
 
         // Insert the PHR which is the PDSU length.
         ack_buf[radio::PHR_OFFSET] = (frame_len + radio::MFR_SIZE) as u8;
-        
-        self.tx_buf.replace(self.set_dma_ptr(ack_buf, &registers)); 
-        
+
+        self.tx_buf.replace(self.set_dma_ptr(ack_buf, &registers));
+
         Ok(registers.into_txen())
     }
 
-    fn start_rx(&self, registers: Nrf52RadioRegisters<On<RxIdle>>) -> Nrf52RadioRegisters<On<Transient>> {
+    fn start_rx(
+        &self,
+        registers: Nrf52RadioRegisters<On<RxIdle>>,
+    ) -> Nrf52RadioRegisters<On<Transient>> {
         self.state.set(RadioState::RX);
 
         // Unwrap fail = Radio RX Buffer is missing (may be due to receive client not replacing in receive(...) method,
@@ -1435,32 +1458,28 @@ impl<'a> Radio<'a> {
 
         registers.into_start()
     }
-
-
 }
 
-impl<'a> kernel::hil::radio::RadioConfig<'a>
-    for Radio<'a>
-{
+impl<'a> kernel::hil::radio::RadioConfig<'a> for Radio<'a> {
     fn initialize(&self) -> Result<(), ErrorCode> {
-        self.registers.take().map(|state| {
-            let (new_state, res) = match state {
-                Nrf52RadioStore::Off(reg) => {
-                    (self.radio_on(reg).into(), Ok(()))
-                }
-                Nrf52RadioStore::Disabled(reg) => {
-                    self.radio_initialize(&reg);
-                    (reg.into(), Ok(()))
-                }
-                state => {
-                    (state,Err(ErrorCode::ALREADY))
-                }
-            };
+        kernel::debug!("initialize");
+        self.registers
+            .take()
+            .map(|state| {
+                let (new_state, res) = match state {
+                    Nrf52RadioStore::Off(reg) => (self.radio_on(reg).into(), Ok(())),
+                    Nrf52RadioStore::Disabled(reg) => {
+                        self.radio_initialize(&reg);
+                        (reg.into(), Ok(()))
+                    }
+                    state => (state, Err(ErrorCode::ALREADY)),
+                };
 
-            // Replace the state with the new state.
-            self.registers.replace(new_state);
-            res
-        }).map_or(Err(ErrorCode::BUSY), |res| res)
+                // Replace the state with the new state.
+                self.registers.replace(new_state);
+                res
+            })
+            .map_or(Err(ErrorCode::BUSY), |res| res)
     }
 
     fn set_power_client(&self, client: &'a dyn PowerClient) {
@@ -1472,95 +1491,83 @@ impl<'a> kernel::hil::radio::RadioConfig<'a>
     }
 
     fn start(&self) -> Result<(), ErrorCode> {
+        self.registers
+            .take()
+            .map(|state| {
+                let new_state = match state {
+                    Nrf52RadioStore::Off(reg) => {
+                        let reg = reg.into_power_on();
+                        self.radio_initialize(&reg);
+                        reg.into()
+                    }
+                    Nrf52RadioStore::Disabled(reg) => {
+                        self.radio_initialize(&reg);
+                        reg.into_rxen().into()
+                    }
+                    Nrf52RadioStore::TxIdle(reg) => reg.into_rxen().into(),
+                    Nrf52RadioStore::RxIdle(reg) => self.start_rx(reg).into(),
+                    Nrf52RadioStore::Transient(_) => {
+                        return Err(ErrorCode::BUSY);
+                    }
+                };
 
-        self.registers.take().map(|state| {
-            let new_state = match state {
-                Nrf52RadioStore::Off(reg) => {
-                    let reg = reg.into_power_on();
-                    self.radio_initialize(&reg);
-                    reg.into()
-                }
-                Nrf52RadioStore::Disabled(reg) => {
-                    self.radio_initialize(&reg);
-                    reg.into_rxen().into()
-                } 
-                Nrf52RadioStore::TxIdle(reg) => {
-                    reg.into_rxen().into()
-                }
-                Nrf52RadioStore::RxIdle(reg) => {
-                    self.start_rx(reg).into()
-                }
-                Nrf52RadioStore::Transient(_) => {
-                    return Err(ErrorCode::BUSY);
-                }
-            };
+                self.state.set(RadioState::RX);
+                // Replace the state with the new state.
+                self.registers.replace(new_state);
 
-            self.state.set(RadioState::RX);
-            // Replace the state with the new state.
-            self.registers.replace(new_state);
+                // Configure deferred call to trigger callback.
+                self.deferred_call_operation
+                    .set(DeferredOperation::PowerClientCallback);
+                self.deferred_call.set();
 
-            // Configure deferred call to trigger callback.
-            self.deferred_call_operation
-                .set(DeferredOperation::PowerClientCallback);
-            self.deferred_call.set();
-
-            Ok(())
-            }).map_or(
-                Err(ErrorCode::BUSY), 
-                |res| res
-            )
-
+                Ok(())
+            })
+            .map_or(Err(ErrorCode::BUSY), |res| res)
     }
 
     fn stop(&self) -> Result<(), ErrorCode> {
-        self.registers.take().map(|state| {
-            let new_state = match state {
-                Nrf52RadioStore::Off(_) => {
-                    self.registers.replace(state);
-                    return Err(ErrorCode::OFF);
-                }
-                Nrf52RadioStore::Disabled(_) => {
-                    state
-                }
-                Nrf52RadioStore::TxIdle(reg) => {
-                    reg.into_disable().into()
-                }
-                Nrf52RadioStore::RxIdle(reg) => {
-                    reg.into_disable().into()
-                }
-                Nrf52RadioStore::Transient(reg) => {
-                    reg.into_disable().into()
-                }
-            };
+        self.registers
+            .take()
+            .map(|state| {
+                let new_state = match state {
+                    Nrf52RadioStore::Off(_) => {
+                        self.registers.replace(state);
+                        return Err(ErrorCode::OFF);
+                    }
+                    Nrf52RadioStore::Disabled(_) => state,
+                    Nrf52RadioStore::TxIdle(reg) => reg.into_disable().into(),
+                    Nrf52RadioStore::RxIdle(reg) => reg.into_disable().into(),
+                    Nrf52RadioStore::Transient(reg) => reg.into_disable().into(),
+                };
 
-            // Replace the state with the new state.
-            self.registers.replace(new_state);
-        // Configure deferred call to trigger callback.
-        self.deferred_call_operation
-            .set(DeferredOperation::PowerClientCallback);
-        self.deferred_call.set();
-            Ok(())
-        }).map_or_else(|| Err(ErrorCode::BUSY), |res| {
-            
-            res})
-
-
+                // Replace the state with the new state.
+                self.registers.replace(new_state);
+                // Configure deferred call to trigger callback.
+                self.deferred_call_operation
+                    .set(DeferredOperation::PowerClientCallback);
+                self.deferred_call.set();
+                Ok(())
+            })
+            .map_or_else(|| Err(ErrorCode::BUSY), |res| res)
     }
 
     fn is_on(&self) -> bool {
-        self.registers.take().map(|state| {
-            if let Nrf52RadioStore::Off(_) = state {
-                (false, state)
-            } else {
-                (true, state)
-            }
-        }).map_or_else(
-            || false, 
-            |(res, state)| {
-                self.registers.replace(state);
-                res
-            }
-        )
+        self.registers
+            .take()
+            .map(|state| {
+                if let Nrf52RadioStore::Off(_) = state {
+                    (false, state)
+                } else {
+                    (true, state)
+                }
+            })
+            .map_or_else(
+                || false,
+                |(res, state)| {
+                    self.registers.replace(state);
+                    res
+                },
+            )
     }
 
     fn busy(&self) -> bool {
@@ -1586,13 +1593,14 @@ impl<'a> kernel::hil::radio::RadioConfig<'a>
     /// any filtering must be done in higher layers in software.
     ///
     /// Issues a callback to the config client when done.
-    fn config_commit(&self)
-    {
+    fn config_commit(&self) {
+        kernel::debug!("config_commit");
         self.registers.take().map(|state| {
             match &state {
-                Nrf52RadioStore::Off(_) => { 
+                Nrf52RadioStore::Off(_) => {
                     self.registers.replace(state);
-                    return }
+                    return;
+                }
                 Nrf52RadioStore::Disabled(reg) => {
                     self.ieee802154_set_tx_power(&reg);
                     self.ieee802154_set_channel_freq(&reg);
@@ -1613,7 +1621,6 @@ impl<'a> kernel::hil::radio::RadioConfig<'a>
 
             self.registers.replace(state);
         });
-
 
         // Enable deferred call so we can generate a `ConfigClient` callback.
         self.deferred_call_operation
@@ -1682,9 +1689,7 @@ impl<'a> kernel::hil::radio::RadioConfig<'a>
     }
 }
 
-impl<'a> kernel::hil::radio::RadioData<'a>
-    for Radio<'a>
-{
+impl<'a> kernel::hil::radio::RadioData<'a> for Radio<'a> {
     fn set_receive_client(&self, client: &'a dyn radio::RxClient) {
         self.rx_client.set(client);
     }
@@ -1697,7 +1702,7 @@ impl<'a> kernel::hil::radio::RadioData<'a>
         self.tx_client.set(client);
     }
 
-    // TO Transmit, we kick off RXEN -> CCASTART -> TXEN -> START 
+    // TO Transmit, we kick off RXEN -> CCASTART -> TXEN -> START
     // to send an ACK we kick off TXEN -> TXSTART
     fn transmit(
         &self,
@@ -1709,40 +1714,41 @@ impl<'a> kernel::hil::radio::RadioData<'a>
             return Err((ErrorCode::SIZE, buf));
         }
 
-        self.registers.take().map(|state| {
-            // Insert the PHR which is the PDSU length.
-            buf[radio::PHR_OFFSET] = (frame_len + radio::MFR_SIZE) as u8;
+        match self.registers.take() {
+            Some(state) => {
+                // Insert the PHR which is the PDSU length.
+                buf[radio::PHR_OFFSET] = (frame_len + radio::MFR_SIZE) as u8;
 
-            match state {
-                Nrf52RadioStore::Off(_) => {
-                    self.registers.replace(state);
-                    return Err((ErrorCode::OFF, buf))
-                }
-                Nrf52RadioStore::Disabled(reg) => {
-            self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
-                    self.registers.replace(reg.into_rxen().into());
-                    Ok(())
-                }
-                Nrf52RadioStore::TxIdle(reg) => {
-            self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
-                    self.registers.replace(reg.into_rxen().into());
-                    Ok(())
-                }
-                Nrf52RadioStore::RxIdle(reg) => { 
-            self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
-                    self.registers.replace(reg.into_ccastart().into());
-                    Ok(())
-                }
-                Nrf52RadioStore::Transient(reg) => {
-                    // Check if we are already transmitting.
-                    if self.busy() {
-                        self.registers.replace(reg.into());
-                        return Err((ErrorCode::BUSY, buf));
+                match state {
+                    Nrf52RadioStore::Off(_) => {
+                        self.registers.replace(state);
+                        return Err((ErrorCode::OFF, buf));
                     }
+                    Nrf52RadioStore::Disabled(reg) => {
+                        self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
+                        self.registers.replace(reg.into_rxen().into());
+                        Ok(())
+                    }
+                    Nrf52RadioStore::TxIdle(reg) => {
+                        self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
+                        self.registers.replace(reg.into_rxen().into());
+                        Ok(())
+                    }
+                    Nrf52RadioStore::RxIdle(reg) => {
+                        self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
+                        self.registers.replace(reg.into_ccastart().into());
+                        Ok(())
+                    }
+                    Nrf52RadioStore::Transient(reg) => {
+                        // Check if we are already transmitting.
+                        if self.busy() {
+                            self.registers.replace(reg.into());
+                            return Err((ErrorCode::BUSY, buf));
+                        }
 
-                    let reg = reg.into_stop();
+                        let reg = reg.into_stop();
 
-                    let reg_res = reg.sync_state();
+                        let reg_res = reg.sync_state();
 
                         if let Nrf52RadioStore::RxIdle(reg) = reg_res {
                             self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
@@ -1751,9 +1757,12 @@ impl<'a> kernel::hil::radio::RadioData<'a>
                         } else {
                             Err((ErrorCode::BUSY, buf))
                         }
+                    }
+                }
             }
-        }}).map_or_else(|| Err((ErrorCode::BUSY, buf)), |res| res)        
-}
+            None => Err((ErrorCode::BUSY, buf)),
+        }
+    }
 }
 
 impl DeferredCallClient for Radio<'_> {

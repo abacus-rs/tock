@@ -20,6 +20,9 @@ use kernel::hil::radio::{self, MAX_FRAME_SIZE, PSDU_OFFSET};
 use kernel::utilities::cells::OptionalCell;
 use kernel::ErrorCode;
 
+use cortexm4f::dwt;
+use kernel::hil::hw_debug::CycleCounter;
+
 pub trait Mac<'a> {
     /// Initializes the layer.
     fn initialize(&self) -> Result<(), ErrorCode>;
@@ -175,7 +178,14 @@ impl<'a, R: radio::Radio<'a>> Mac<'a> for AwakeMac<'a, R> {
         }
 
         full_mac_frame.copy_within(0..frame_len, PSDU_OFFSET);
-        self.radio.transmit(full_mac_frame, frame_len)
+        let dwt = dwt::Dwt::new();
+        dwt.start();
+        let start = dwt.count();
+        let res = self.radio.transmit(full_mac_frame, frame_len);
+        dwt.stop();
+        let end = dwt.count();
+        kernel::debug!("[EVAL] transmit {}", (end - start));
+        res
     }
 }
 
