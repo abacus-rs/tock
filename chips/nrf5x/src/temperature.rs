@@ -52,11 +52,11 @@ impl SyncState for Nrf5xTempRegisters<Off> {
 struct RegisterBlock {
     /// Start temperature measurement
     /// Address: 0x000 - 0x004
-    #[RegAttributes([Off], StateChange(Reading, Task::ENABLE::SET))]
+    #[RegAttributes([Off], StateChange(Reading, [Task::ENABLE::SET]))]
     pub task_start: WriteOnly<u32, Task::Register>,
     /// Stop temperature measurement
     /// Address: 0x004 - 0x008
-    #[RegAttributes([Reading], StateChange(Off, Task::ENABLE::SET))]
+    #[RegAttributes([Reading], StateChange(Off, [Task::ENABLE::SET]))]
     pub task_stop: WriteOnly<u32, Task::Register>,
     /// Reserved
     pub _reserved1: [u32; 62],

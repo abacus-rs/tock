@@ -151,6 +151,30 @@ impl SyncState for Nrf52RadioRegisters<On<TxIdle>> {
     }
 }
 
+impl SyncState for Nrf52RadioRegisters<On<TxSetup>> {
+    type SyncStateEnum = Nrf52RadioStore;
+
+    fn sync_state(self) -> Self::SyncStateEnum {
+        self.into()
+    }
+}
+
+impl SyncState for Nrf52RadioRegisters<On<RxSetup>> {
+    type SyncStateEnum = Nrf52RadioStore;
+
+    fn sync_state(self) -> Self::SyncStateEnum {
+        self.into()
+    }
+}
+
+impl SyncState for Nrf52RadioRegisters<On<TxSetupIdle>> {
+    type SyncStateEnum = Nrf52RadioStore;
+
+    fn sync_state(self) -> Self::SyncStateEnum {
+        self.into()
+    }
+}
+
 impl SyncState for Nrf52RadioRegisters<On<Transient>> {
     type SyncStateEnum = Nrf52RadioStore;
 
@@ -169,7 +193,6 @@ impl SyncState for Nrf52RadioRegisters<On<Transient>> {
         // TX = 11,
         // TXDISABLED = 12
         /////////////////////////////
-
         match state {
             0 => Nrf52RadioStore::Disabled(unsafe {
                 transmute::<Self, Nrf52RadioRegisters<On<Disabled>>>(self)
@@ -207,32 +230,36 @@ impl SyncState for Nrf52RadioRegisters<On<Transient>> {
     register_base_addr = 0x40001000,
     states = [
         Off => [On(Disabled)],
-        On(Disabled) => [On(Transient)]{Disabled}, 
-        On(RxIdle) => [On(Transient)]{RxIdle}, 
-        On(TxIdle) => [On(Transient)]{TxIdle},
+        On(Disabled) => [On(TxSetup), On(RxSetup)]{Disabled},
+        On(TxSetup) => [On(Transient)]{TxSetup},
+        On(RxSetup) => [On(Transient)]{RxSetup},
+        On(TxSetupIdle) => [On(Transient)]{TxSetupIdle},
+        On(RxIdle) => [On(Transient), On(TxSetup)]{RxIdle}, 
+        On(TxIdle) => [On(Transient), On(RxSetup)]{TxIdle},
         On(Transient) => []{Transient},
     ]
 )]
 struct RadioRegisters {
     /// Enable Radio in TX mode
     /// - Address: 0x000 - 0x004
-    #[RegAttributes([On(Disabled), On(RxIdle)], StateChange(On(Transient), Task::ENABLE::SET, txen))]
+    #[RegAttributes([On(RxIdle)], StateChange(On(Transient), [Task::ENABLE::SET], txen))]
     task_txen: WriteOnly<u32, Task::Register>,
     /// Enable Radio in RX mode
     /// - Address: 0x004 - 0x008
-    #[RegAttributes([On(Disabled), On(TxIdle)], StateChange(On(Transient), Task::ENABLE::SET, rxen))]
+    #[RegAttributes([On(TxIdle), On(TxSetup)], StateChange(On(Transient), [Task::ENABLE::SET], transmit))]
+    #[RegAttributes([On(RxSetup)], StateChange(On(Transient), [Task::ENABLE::SET], receive))]
     task_rxen: WriteOnly<u32, Task::Register>,
     /// Start Radio
     /// - Address: 0x008 - 0x00c
-    #[RegAttributes([On(TxIdle), On(RxIdle)], StateChange(On(Transient), Task::ENABLE::SET, start))]
+    #[RegAttributes([On(TxIdle), On(RxIdle)], StateChange(On(Transient), [Task::ENABLE::SET], start))]
     task_start: WriteOnly<u32, Task::Register>,
     /// Stop Radio
     /// - Address: 0x00c - 0x010
-    #[RegAttributes([On(Any)], StateChange(On(Transient), Task::ENABLE::SET, stop))]
+    #[RegAttributes([On(Any)], StateChange(On(Transient), [Task::ENABLE::SET], stop))]
     task_stop: WriteOnly<u32, Task::Register>,
     /// Disable Radio
     /// - Address: 0x010 - 0x014
-    #[RegAttributes([On(Any)], StateChange(On(Transient), Task::ENABLE::SET, disable))]
+    #[RegAttributes([On(Any)], StateChange(On(Transient), [Task::ENABLE::SET], disable))]
     task_disable: WriteOnly<u32, Task::Register>,
     /// Start the RSSI and take one single sample of the receive signal strength
     /// - Address: 0x014- 0x018
@@ -250,11 +277,12 @@ struct RadioRegisters {
     _reserved1: [u32; 2],
     /// Stop the bit counter
     /// - Address: 0x02c - 0x030
-    #[RegAttributes([On(RxIdle)], StateChange(On(Transient), Task::ENABLE::SET, ccastart))]
+    #[RegAttributes([On(RxIdle)], StateChange(On(Transient), [Task::ENABLE::SET], ccastart))]
+    #[RegAttributes([On(TxSetupIdle)], StateChange(On(Transient), [Task::ENABLE::SET], transmit_idle))]
     task_ccastart: WriteOnly<u32, Task::Register>,
     /// Stop the bit counter
     /// - Address: 0x030 - 0x034
-    #[RegAttributes([On(Any)], StateChange(On(Transient), Task::ENABLE::SET, ccastop))]
+    #[RegAttributes([On(Any)], StateChange(On(Transient), [Task::ENABLE::SET], ccastop))]
     task_ccastop: WriteOnly<u32, Task::Register>,
     /// Reserved
     _reserved2: [u32; 51],
@@ -310,6 +338,12 @@ struct RadioRegisters {
     _reserved6: [u32; 45],
     /// Shortcut register
     /// - Address: 0x200 - 0x204
+    #[RegAttributes([On(Disabled), On(TxIdle), On(TxSetup)], StateChange(On(RxSetup), 
+    [Shortcut::READY_START::SET], setuprx))]
+    #[RegAttributes([On(Disabled), On(RxSetup)], StateChange(On(TxSetup), 
+    [Shortcut::CCAIDLE_TXEN::SET, Shortcut::RXREADY_CCASTART::SET, Shortcut::TXREADY_START::SET], setuptx))]
+    #[RegAttributes([On(RxIdle)], StateChange(On(TxSetupIdle), 
+    [Shortcut::CCAIDLE_TXEN::SET, Shortcut::TXREADY_START::SET], setup_txidle))]
     shorts: ReadWrite<u32, Shortcut::Register>,
     /// Reserved
     _reserved7: [u32; 64],
@@ -436,8 +470,8 @@ struct RadioRegisters {
     _reserved17: [u32; 611],
     /// Peripheral power control
     /// - Address: 0xFFC - 0x1000
-    #[RegAttributes([Off], StateChange(On(Disabled), Task::ENABLE::SET, power_on))]
-    #[RegAttributes([On(Disabled)], StateChange(Off, Task::ENABLE::CLEAR))]
+    #[RegAttributes([Off], StateChange(On(Disabled), [Task::ENABLE::SET], power_on))]
+    #[RegAttributes([On(Disabled)], StateChange(Off, [Task::ENABLE::CLEAR]))]
     power: ReadWrite<u32, Task::Register>,
 }
 
@@ -475,7 +509,7 @@ register_bitfields! [u32,
         /// Shortcut between RXREADY_CCASTART
         RXREADY_CCASTART OFFSET(11) NUMBITS(1),
         /// Shortcut between TXREADY event and START task
-        TXREADY_START OFFSET(19) NUMBITS(1),
+        TXREADY_START OFFSET(18) NUMBITS(1),
 
     ],
     /// Interrupt register
@@ -933,14 +967,17 @@ impl<'a> Radio<'a> {
             // Disable Interrupts
             match &state {
                 Nrf52RadioStore::Off(_) => {}
-                Nrf52RadioStore::Disabled(reg) =>                   self.disable_all_interrupts(&reg),
-                Nrf52RadioStore::RxIdle(reg) =>                     self.disable_all_interrupts(&reg),
-                Nrf52RadioStore::TxIdle(reg) =>                    self.disable_all_interrupts(&reg),
+                Nrf52RadioStore::Disabled(reg) => self.disable_all_interrupts(&reg),
+                Nrf52RadioStore::RxIdle(reg) => self.disable_all_interrupts(&reg),
+                Nrf52RadioStore::TxIdle(reg) => self.disable_all_interrupts(&reg),
                 Nrf52RadioStore::Transient(reg) => self.disable_all_interrupts(&reg),
+                Nrf52RadioStore::RxSetup(reg) => self.disable_all_interrupts(&reg),
+                Nrf52RadioStore::TxSetup(reg) => self.disable_all_interrupts(&reg),
+                Nrf52RadioStore::TxSetupIdle(reg) => self.disable_all_interrupts(&reg),
             }
 
 
-            let new_state = match state {
+            let new_state: Nrf52RadioStore = match state {
                 Nrf52RadioStore::Off(_) => {
                     unreachable!()
                 }
@@ -957,16 +994,8 @@ impl<'a> Radio<'a> {
                 }
                 Nrf52RadioStore::RxIdle(reg) => {
                     if let RadioState::RX = self.state.get() {
-                        if reg.event_ready.is_set(Event::READY) {
-                            // The radio is ready to receive a packet. We need to
-                            // clear the READY event register before we can start
-                            // receiving.
-                            reg.event_ready.write(Event::READY::CLEAR);
-                            self.start_rx(reg).into()
-                        } 
-
                     // Completed receiving a packet, now determine if we need to send ACK
-                    else if reg.event_end.is_set(Event::READY) {
+                    if reg.event_end.is_set(Event::READY) {
                         reg.event_end.write(Event::READY::CLEAR);
                         let crc = self.crc_check(&reg);
 
@@ -1114,46 +1143,21 @@ impl<'a> Radio<'a> {
                             });
 
                             self.start_rx(reg).into()
-                        }
-                    } else {
-                        // Start first CCA
-                        if reg.event_ready.is_set(Event::READY) {
-                            reg.event_ready.write(Event::READY::CLEAR);
-
-                            // Start the cca
-                            reg.into_ccastart().into()
-                        } else {
-                            // We did not just enter RxIdle, so return the registers, doing nothing.
-                            reg.into()
-                        }
-                    }
+                        }  
                 } else {
                     reg.into()
                 }
 
-                }
+                } else {
+                    reg.into()
+                }}
                 Nrf52RadioStore::TxIdle(reg) => {
                     let radio_state = self.state.get();
 
                     if let RadioState::TX = radio_state {
-
-                    // Handle Event_ready interrupt. The TX path performs both a TX
-                    // ramp up and an RX ramp up. This means that there are two
-                    // potential cases we must handle. The ready event due to the Rx
-                    // Ramp up shortcuts to the CCASTART while the ready event due
-                    // to the Tx ramp up requires we issue a start task in response
-                    // to progress the state machine.
-                    if reg.event_ready.is_set(Event::READY) {
-                        // In both cases, we must clear event
-                        reg.event_ready.write(Event::READY::CLEAR);
-
-                        // start tx
-                        reg.into_start().into()
-                    }
-                    
                     // End event received; The TX is now finished and we need to
                     // notify the sending client.
-                    else if reg.event_end.is_set(Event::READY) {
+                    if reg.event_end.is_set(Event::READY) {
                         reg.event_end.write(Event::READY::CLEAR);
                         let result = Ok(());
 
@@ -1174,19 +1178,8 @@ impl<'a> Radio<'a> {
                     
 
                     } else if let RadioState::ACK = radio_state {
-
-                        if reg.event_ready.is_set(Event::READY) {
-                            // The radio is ready to transmit a packet. We need to
-                            // clear the READY event register before we can start
-                            // transmitting.
-                            reg.event_ready.write(Event::READY::CLEAR);
-                            
-                            reg.into_start().into()
-                           
-                        }
-
                         // Completed sending ACK
-                        else if reg.event_end.is_set(Event::READY) {
+                        if reg.event_end.is_set(Event::READY) {
                             reg.event_end.write(Event::READY::CLEAR);
                             
                             // Notify receive client of packet that triggered the ACK.
@@ -1218,10 +1211,10 @@ impl<'a> Radio<'a> {
                         reg.into()
                     }
                                 }
-                Nrf52RadioStore::Transient(reg) => {
-                    // Do nothing.
-                    reg.into()
-                }
+                Nrf52RadioStore::Transient(reg) => {reg.into()}
+                Nrf52RadioStore::RxSetup(reg) => { reg.into() }
+                Nrf52RadioStore::TxSetup(reg) => { reg.into() }
+                Nrf52RadioStore::TxSetupIdle(reg) => { reg.into() }
             };
 
             // Enable all interrupts
@@ -1233,6 +1226,9 @@ impl<'a> Radio<'a> {
                 Nrf52RadioStore::RxIdle(reg) => self.enable_interrupts(&reg),
                 Nrf52RadioStore::TxIdle(reg) => self.enable_interrupts(&reg),
                 Nrf52RadioStore::Transient(reg) => self.enable_interrupts(&reg),
+                Nrf52RadioStore::RxSetup(reg) => self.enable_interrupts(&reg),
+                Nrf52RadioStore::TxSetup(reg) => self.enable_interrupts(&reg),
+                Nrf52RadioStore::TxSetupIdle(reg) => self.enable_interrupts(&reg),
             };
 
             self.registers.replace(new_state);
@@ -1245,8 +1241,7 @@ impl<'a> Radio<'a> {
         S: SubState,
     {
         registers.intenset.write(
-            Interrupt::READY::SET
-                + Interrupt::CCABUSY::SET
+                Interrupt::CCABUSY::SET
                 + Interrupt::END::SET
                 + Interrupt::DISABLED::SET,
         );
@@ -1282,11 +1277,6 @@ impl<'a> Radio<'a> {
     }
 
     fn radio_initialize(&self, registers: &Nrf52RadioRegisters<On<Disabled>>) {
-        // Instruct radio hardware to automatically progress from:
-        // - RX to TXRU state upon internal receipt CCA completion event
-        //   (clear to begin transmitting)
-        registers.shorts.write(Shortcut::CCAIDLE_TXEN::SET);
-
         // CONFIGURE RADIO //
         self.ieee802154_set_channel_rate(&registers);
 
@@ -1440,7 +1430,8 @@ impl<'a> Radio<'a> {
 
     fn switch_to_rx(&self, registers: Nrf52RadioRegisters<On<TxIdle>>) -> Nrf52RadioRegisters<On<Transient>> {
         self.state.set(RadioState::RX);
-        registers.into_rxen()
+        let registers = registers.into_setuprx();
+        registers.into_receive()
     }
 
     fn start_rx(
@@ -1495,16 +1486,29 @@ impl<'a> kernel::hil::radio::RadioConfig<'a> for Radio<'a> {
                     Nrf52RadioStore::Off(reg) => {
                         let reg = reg.into_power_on();
                         self.radio_initialize(&reg);
-                        reg.into()
+                        let reg = reg.into_setuprx();
+                        reg.into_receive().into()
                     }
                     Nrf52RadioStore::Disabled(reg) => {
                         self.radio_initialize(&reg);
-                        reg.into_rxen().into()
+                        let reg = reg.into_setuprx();
+                        reg.into_receive().into()
                     }
-                    Nrf52RadioStore::TxIdle(reg) => reg.into_rxen().into(),
+                    Nrf52RadioStore::TxIdle(reg) => {
+                        let reg = reg.into_setuprx();
+                        reg.into_receive().into()
+                    },
                     Nrf52RadioStore::RxIdle(reg) => self.start_rx(reg).into(),
                     Nrf52RadioStore::Transient(_) => {
                         return Err(ErrorCode::BUSY);
+                    }
+                    Nrf52RadioStore::RxSetup(reg) => reg.into_receive().into(),
+                    Nrf52RadioStore::TxSetup(reg) => {
+                        let reg = reg.into_setuprx();
+                        reg.into_receive().into()
+                    }
+                    Nrf52RadioStore::TxSetupIdle(reg) => {
+                        unimplemented!()
                     }
                 };
 
@@ -1535,6 +1539,9 @@ impl<'a> kernel::hil::radio::RadioConfig<'a> for Radio<'a> {
                     Nrf52RadioStore::TxIdle(reg) => reg.into_disable().into(),
                     Nrf52RadioStore::RxIdle(reg) => reg.into_disable().into(),
                     Nrf52RadioStore::Transient(reg) => reg.into_disable().into(),
+                    Nrf52RadioStore::RxSetup(reg) => reg.into_disable().into(),
+                    Nrf52RadioStore::TxSetup(reg) => reg.into_disable().into(),
+                    Nrf52RadioStore::TxSetupIdle(reg) => reg.into_disable().into(),
                 };
 
                 // Replace the state with the new state.
@@ -1610,6 +1617,18 @@ impl<'a> kernel::hil::radio::RadioConfig<'a> for Radio<'a> {
                     self.ieee802154_set_channel_freq(&reg);
                 }
                 Nrf52RadioStore::Transient(reg) => {
+                    self.ieee802154_set_tx_power(&reg);
+                    self.ieee802154_set_channel_freq(&reg);
+                }
+                Nrf52RadioStore::RxSetup(reg) => {
+                    self.ieee802154_set_tx_power(&reg);
+                    self.ieee802154_set_channel_freq(&reg);
+                }
+                Nrf52RadioStore::TxSetup(reg) => {
+                    self.ieee802154_set_tx_power(&reg);
+                    self.ieee802154_set_channel_freq(&reg);
+                }
+                Nrf52RadioStore::TxSetupIdle(reg) => {
                     self.ieee802154_set_tx_power(&reg);
                     self.ieee802154_set_channel_freq(&reg);
                 }
@@ -1713,7 +1732,6 @@ impl<'a> kernel::hil::radio::RadioData<'a> for Radio<'a> {
             Some(state) => {
                 // Insert the PHR which is the PDSU length.
                 buf[radio::PHR_OFFSET] = (frame_len + radio::MFR_SIZE) as u8;
-
                 match state {
                     Nrf52RadioStore::Off(_) => {
                         self.registers.replace(state);
@@ -1722,19 +1740,40 @@ impl<'a> kernel::hil::radio::RadioData<'a> for Radio<'a> {
                     Nrf52RadioStore::Disabled(reg) => {
                         self.state.set(RadioState::TX);
                         self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
-                        self.registers.replace(reg.into_rxen().into());
+                        let reg = reg.into_setuptx();
+                        self.registers.replace(reg.into_transmit().into());
+                        Ok(())
+                    }
+                    Nrf52RadioStore::TxSetup(reg) => {
+                        self.state.set(RadioState::TX);
+                        self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
+                        self.registers.replace(reg.into_transmit().into());
                         Ok(())
                     }
                     Nrf52RadioStore::TxIdle(reg) => {
                         self.state.set(RadioState::TX);
                         self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
-                        self.registers.replace(reg.into_rxen().into());
+                        self.registers.replace(reg.into_transmit().into());
+                        Ok(())
+                    }
+                    Nrf52RadioStore::TxSetupIdle(reg) => {
+                        self.state.set(RadioState::TX);
+                        self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
+                        self.registers.replace(reg.into_transmit_idle().into());
+                        Ok(())
+                    }
+                    Nrf52RadioStore::RxSetup(reg) => {
+                        self.state.set(RadioState::TX);
+                        self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
+                        let reg: Nrf52RadioRegisters<On<TxSetup>> = reg.into_setuptx();
+                        self.registers.replace(reg.into_transmit().into());
                         Ok(())
                     }
                     Nrf52RadioStore::RxIdle(reg) => {
                         self.state.set(RadioState::TX);
                         self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
-                        self.registers.replace(reg.into_ccastart().into());
+                        let reg = reg.into_setup_txidle();
+                        self.registers.replace(reg.into_transmit_idle().into());
                         Ok(())
                     }
                     Nrf52RadioStore::Transient(reg) => {
@@ -1751,7 +1790,10 @@ impl<'a> kernel::hil::radio::RadioData<'a> for Radio<'a> {
                         if let Nrf52RadioStore::RxIdle(reg) = reg_res {
                             self.state.set(RadioState::TX);
                             self.tx_buf.replace(self.set_dma_ptr(buf, &reg));
-                            self.registers.replace(reg.into_ccastart().into());
+                            let reg = reg.into_setup_txidle();
+                            // self.registers.replace(reg.into_transmit_idle().into());
+                            let reg = reg.into_transmit_idle();
+                            self.registers.replace(reg.into());
                             Ok(())
                         } else {
                             Err((ErrorCode::BUSY, buf))

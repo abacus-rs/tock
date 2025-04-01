@@ -248,7 +248,7 @@ enum RegisterType {
     ReadOnly,
     WriteOnly,
     ReadWrite,
-    StateChange(State, syn::Path, Ident),
+    StateChange(State, Punctuated<syn::Path, syn::Token![,]>, Ident),
     StateChangeRW,
 }
 
@@ -279,13 +279,19 @@ impl Parse for RegisterType {
 
                 let _: syn::Token![,] = content.parse().expect("register 2");
 
-                let instruction = content.parse::<syn::Path>().expect("registertype 2");
+                // bracketed with potentially multiple values to set atomically
+                // [instr1, instr2, instr3, ..]
+                let instructions;
+                let _: syn::token::Bracket = syn::bracketed!(instructions in content);
+                let instructions: Punctuated<syn::Path, syn::Token![,]> = instructions.
+                parse_terminated(syn::Path::parse, syn::Token![,])
+            .expect("instruction error");
 
                 if new_state.substates.is_empty() {
                     let state_shortname = new_state.ident.clone();
                     return Ok(RegisterType::StateChange(
                         new_state,
-                        instruction,
+                        instructions,
                         state_shortname,
                     ));
                 } else {
@@ -295,7 +301,7 @@ impl Parse for RegisterType {
                     let state_shortname = content.parse::<syn::Ident>().expect("registertype 3");
                     return Ok(RegisterType::StateChange(
                         new_state,
-                        instruction,
+                        instructions,
                         state_shortname,
                     ));
                 }
@@ -607,6 +613,18 @@ impl Register {
                 }
             }
             RegisterType::StateChange(state, instruction, state_shortname) => {
+                // for Punctuated<Path, Comma> form Path1 + Path2 + Path3
+                let instruct_ident = instruction.iter().map(|instr| {
+                    quote! {
+                        #instr
+                    }
+                });
+
+                let instruction = quote! {
+                    #(#instruct_ident)+*
+                };
+
+                
                 let mut state_change_output = proc_macro2::TokenStream::new();
 
                 let reg_field_name = self.name.clone();
