@@ -59,14 +59,15 @@ use crate::net::stream::{decode_bytes, decode_u8, encode_bytes, encode_u8, SResu
 
 use core::cell::Cell;
 
+use cortexm4f::dwt;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 use kernel::grant::{AllowRoCount, AllowRwCount, Grant, UpcallCount};
+use kernel::hil::hw_debug::CycleCounter;
 use kernel::hil::radio;
 use kernel::processbuffer::{ReadableProcessBuffer, WriteableProcessBuffer};
 use kernel::syscall::{CommandReturn, SyscallDriver};
 use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
 use kernel::{ErrorCode, ProcessId};
-
 const MAX_NEIGHBORS: usize = 4;
 const MAX_KEYS: usize = 4;
 
@@ -906,6 +907,9 @@ impl<'a, M: device::MacDevice<'a>> SyscallDriver for RadioDriver<'a, M> {
 
             25 => self.remove_key(arg1).into(),
             26 => {
+                let dwt = dwt::Dwt::new();
+                dwt.start();
+                kernel::debug!("[EVAL] transmit start {}", dwt.count());
                 self.apps
                     .enter(processid, |app, kernel_data| {
                         if app.pending_tx.is_some() {
@@ -980,6 +984,8 @@ impl<'a, M: device::MacDevice<'a>> SyscallDriver for RadioDriver<'a, M> {
 
 impl<'a, M: device::MacDevice<'a>> device::TxClient for RadioDriver<'a, M> {
     fn send_done(&self, spi_buf: &'static mut [u8], acked: bool, result: Result<(), ErrorCode>) {
+        let dwt = dwt::Dwt::new();
+        kernel::debug!("[EVAL] transmit_done END {}", dwt.count());
         self.kernel_tx.replace(spi_buf);
         self.current_app.take().map(|processid| {
             let _ = self.apps.enter(processid, |_app, upcalls| {

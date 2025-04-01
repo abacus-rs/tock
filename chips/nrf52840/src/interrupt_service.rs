@@ -53,13 +53,14 @@ impl kernel::platform::chip::InterruptService for Nrf52840DefaultPeripherals<'_>
                 ) {
                     (false, false) => (),
                     (true, false) => {
-                        let dwt = dwt::Dwt::new();
-                        dwt.start();
-                        let start = dwt.count();
+                        //let dwt = dwt::Dwt::new();
+                        //dwt.start();
+                        //let start = dwt.count();
+                        //self.ieee802154_radio.handle_interrupt();
+                        //let end = dwt.count();
+                        //dwt.stop();
+                        //kernel::debug!("[EVAL] handle_interrupt {}", (end - start))
                         self.ieee802154_radio.handle_interrupt();
-                        let end = dwt.count();
-                        dwt.stop();
-                        kernel::debug!("[EVAL] handle_interrupt {}", (end - start))
                     }
                     (false, true) => self.nrf52.ble_radio.handle_interrupt(),
                     (true, true) => kernel::debug!(

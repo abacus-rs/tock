@@ -178,14 +178,15 @@ impl<'a, R: radio::Radio<'a>> Mac<'a> for AwakeMac<'a, R> {
         }
 
         full_mac_frame.copy_within(0..frame_len, PSDU_OFFSET);
-        let dwt = dwt::Dwt::new();
-        dwt.start();
-        let start = dwt.count();
-        let res = self.radio.transmit(full_mac_frame, frame_len);
-        let end = dwt.count();
-        dwt.stop();
-        kernel::debug!("[EVAL] transmit {}", (end - start));
-        res
+        // let dwt = dwt::Dwt::new();
+        // dwt.start();
+        // let start = dwt.count();
+        // let res = self.radio.transmit(full_mac_frame, frame_len);
+        // let end = dwt.count();
+        // dwt.stop();
+        // kernel::debug!("[EVAL] transmit {}", (end - start));
+        // res
+        self.radio.transmit(full_mac_frame, frame_len)
     }
 }
 
