@@ -1487,15 +1487,27 @@ impl<'a> kernel::hil::radio::RadioConfig<'a> for Radio<'a> {
                         let reg = reg.into_power_on();
                         self.radio_initialize(&reg);
                         let reg = reg.into_setuprx();
+        // Unwrap fail = Radio RX Buffer is missing (may be due to receive client not replacing in receive(...) method,
+        // or some instance in  driver taking buffer without properly replacing).
+        let rbuf = self.rx_buf.take().unwrap();
+        self.rx_buf.replace(self.set_dma_ptr(rbuf, &reg));
                         reg.into_receive().into()
                     }
                     Nrf52RadioStore::Disabled(reg) => {
                         self.radio_initialize(&reg);
                         let reg = reg.into_setuprx();
+        // Unwrap fail = Radio RX Buffer is missing (may be due to receive client not replacing in receive(...) method,
+        // or some instance in  driver taking buffer without properly replacing).
+        let rbuf = self.rx_buf.take().unwrap();
+        self.rx_buf.replace(self.set_dma_ptr(rbuf, &reg));
                         reg.into_receive().into()
                     }
                     Nrf52RadioStore::TxIdle(reg) => {
                         let reg = reg.into_setuprx();
+        // Unwrap fail = Radio RX Buffer is missing (may be due to receive client not replacing in receive(...) method,
+        // or some instance in  driver taking buffer without properly replacing).
+        let rbuf = self.rx_buf.take().unwrap();
+        self.rx_buf.replace(self.set_dma_ptr(rbuf, &reg));
                         reg.into_receive().into()
                     },
                     Nrf52RadioStore::RxIdle(reg) => self.start_rx(reg).into(),
@@ -1505,6 +1517,10 @@ impl<'a> kernel::hil::radio::RadioConfig<'a> for Radio<'a> {
                     Nrf52RadioStore::RxSetup(reg) => reg.into_receive().into(),
                     Nrf52RadioStore::TxSetup(reg) => {
                         let reg = reg.into_setuprx();
+        // Unwrap fail = Radio RX Buffer is missing (may be due to receive client not replacing in receive(...) method,
+        // or some instance in  driver taking buffer without properly replacing).
+        let rbuf = self.rx_buf.take().unwrap();
+        self.rx_buf.replace(self.set_dma_ptr(rbuf, &reg));
                         reg.into_receive().into()
                     }
                     Nrf52RadioStore::TxSetupIdle(reg) => {
