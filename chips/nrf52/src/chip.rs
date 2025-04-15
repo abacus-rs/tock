@@ -62,7 +62,7 @@ impl Nrf52DefaultPeripherals<'_> {
             timer0: crate::timer::TimerAlarm::new(0),
             timer1: crate::timer::TimerAlarm::new(1),
             timer2: crate::timer::Timer::new(2),
-            uarte0: crate::uart::Uarte::new(crate::uart::UARTE0_BASE),
+            uarte0: crate::uart::Uarte::new(),
             spim0: crate::spi::SPIM::new(0),
             twi1: crate::i2c::TWI::new_twi1(),
             spim2: crate::spi::SPIM::new(2),
