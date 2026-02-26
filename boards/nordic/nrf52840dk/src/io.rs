@@ -7,7 +7,6 @@ use kernel::debug::IoWrite;
 use kernel::hil::uart;
 use kernel::hil::uart::Configure;
 
-use kernel::power_manager::PowerManager;
 use nrf52840::{
     power,
     uart::{Uarte, UARTE0_BASE},

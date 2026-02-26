@@ -98,7 +98,7 @@ members = [
     "libraries/riscv-csr",
     "libraries/tock-cells",
     "libraries/tock-register-interface",
-    "libraries/tickv", "libraries/power_states",
+    "libraries/tickv", 
 ]
 exclude = ["tools/"]
 resolver = "2"

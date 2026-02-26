@@ -15,10 +15,8 @@ use core::ptr::{addr_of, addr_of_mut};
 use kernel::component::Component;
 use kernel::debug;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
-use kernel::power_manager::PowerManager;
 use kernel::{capabilities, create_capability};
 use nrf52840::gpio::Pin;
-use nrf52840::power_manager::Nrf52840PowerManager;
 use nrf52840dk_lib::{self, PROCESSES};
 
 type ScreenDriver = components::screen::ScreenComponentType;
