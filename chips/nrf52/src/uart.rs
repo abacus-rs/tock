@@ -15,12 +15,9 @@ use core::cmp::min;
 use kernel::hil::uart;
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
-use kernel::utilities::registers::{self, register_bitfields, ReadOnly, ReadWrite, WriteOnly};
-use kernel::utilities::StaticRef;
+use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
 use kernel::ErrorCode;
 use nrf5x::pinmux;
-
-use power_states::{entry_point, process_register_block};
 
 const UARTE_MAX_BUFFER_SIZE: u32 = 0xff;
 
@@ -28,26 +25,28 @@ static mut BYTE: u8 = 0;
 
 pub const UARTE0_BASE: usize = 0x40002000;
 
+use abacus_registers::process_register_block;
+
 // pub const UARTE0_BASE: StaticRef<UarteRegisters> =
 //     unsafe { StaticRef::new(0x40002000 as *const UarteRegisters) };
 
 // ADD SYNC STATE IMPLEMENTATION
 impl SyncState for Nrf52UarteRegisters<Active<RxIdle, TxIdle>> {
-    type SyncStateEnum = Nrf52UarteStore;
+    type SyncStateEnum = Nrf52UarteStateEnum;
     fn sync_state(self) -> Self::SyncStateEnum {
         self.into()
     }
 }
 
 impl SyncState for Nrf52UarteRegisters<Off> {
-    type SyncStateEnum = Nrf52UarteStore;
+    type SyncStateEnum = Nrf52UarteStateEnum;
     fn sync_state(self) -> Self::SyncStateEnum {
         self.into()
     }
 }
 
 impl SyncState for Nrf52UarteRegisters<Active<Transient, TxIdle>> {
-    type SyncStateEnum = Nrf52UarteStore;
+    type SyncStateEnum = Nrf52UarteStateEnum;
     fn sync_state(self) -> Self::SyncStateEnum {
         // Check if Rx finished interrupt fired.
         if self.event_endrx.is_set(Event::READY) {
@@ -59,7 +58,7 @@ impl SyncState for Nrf52UarteRegisters<Active<Transient, TxIdle>> {
 }
 
 impl SyncState for Nrf52UarteRegisters<Active<RxIdle, Transient>> {
-    type SyncStateEnum = Nrf52UarteStore;
+    type SyncStateEnum = Nrf52UarteStateEnum;
     fn sync_state(self) -> Self::SyncStateEnum {
         // Check if Tx finished interrupt fired.
         if self.event_endtx.is_set(Event::READY) {
@@ -71,7 +70,7 @@ impl SyncState for Nrf52UarteRegisters<Active<RxIdle, Transient>> {
 }
 
 impl SyncState for Nrf52UarteRegisters<Active<Transient, Transient>> {
-    type SyncStateEnum = Nrf52UarteStore;
+    type SyncStateEnum = Nrf52UarteStateEnum;
     fn sync_state(self) -> Self::SyncStateEnum {
         // Check if Rx finished interrupt fired.
         if self.event_endrx.is_set(Event::READY) {
@@ -101,11 +100,11 @@ impl SyncState for Nrf52UarteRegisters<Active<Transient, Transient>> {
     peripheral_name = "Nrf52Uarte",
     register_base_addr = 0x40002000,
     states = [
-        Off => [Active(RxIdle, TxIdle)],
-        Active(RxIdle, TxIdle) => [Active(RxIdle, Transient), Active(Transient, TxIdle), Off] {ActiveIdle},
-        Active(Transient, TxIdle) => [Active(RxIdle, TxIdle), Active(Transient, Transient)] {ActiveRx},
-        Active(RxIdle, Transient) => [Active(RxIdle, TxIdle), Active(Transient, Transient)] {ActiveTx},
-        Active(Transient, Transient) => [Active(Transient, TxIdle), Active(RxIdle, Transient)] {ActiveRxTx},
+        (Off),
+        (Active(RxIdle, TxIdle), ActiveIdle),
+        (Active(Transient, TxIdle), ActiveRx, *T*),
+        (Active(RxIdle, Transient), ActiveTx, *T*),
+        (Active(Transient, Transient), ActiveRxTx, *T*)
     ]
 )]
 pub struct UarteRegisters {
@@ -287,7 +286,7 @@ pub struct Uarte<'a> {
     rx_remaining_bytes: Cell<usize>,
     rx_abort_in_progress: Cell<bool>,
     offset: Cell<usize>,
-    state: OptionalCell<Nrf52UarteStore>,
+    state: OptionalCell<Nrf52UarteStateEnum>,
 }
 
 #[derive(Copy, Clone)]
@@ -309,7 +308,9 @@ impl<'a> Uarte<'a> {
             rx_remaining_bytes: Cell::new(0),
             rx_abort_in_progress: Cell::new(false),
             offset: Cell::new(0),
-            state: OptionalCell::new(Nrf52UarteStore::Off(Nrf52UarteRegisters::new())),
+            state: OptionalCell::new(Nrf52UarteStateEnum::Off(unsafe {
+                Nrf52UarteRegisters::new(0x40002000)
+            })),
         }
     }
 
@@ -324,7 +325,7 @@ impl<'a> Uarte<'a> {
         self.state
             .take()
             .map(|state| {
-                if let Nrf52UarteStore::Off(registers) = state {
+                if let Nrf52UarteStateEnum::Off(registers) = state {
                     registers.pseltxd.write(Psel::PIN.val(txd.into()));
                     registers.pselrxd.write(Psel::PIN.val(rxd.into()));
 
@@ -445,7 +446,6 @@ impl<'a> Uarte<'a> {
 
     /// UART interrupt handler that listens for both tx_end and rx_end events
     #[inline(never)]
-    #[entry_point("state")]
     pub fn handle_interrupt(&self) {
         let mut completed_tx = false;
         let mut completed_rx = false;
@@ -453,7 +453,7 @@ impl<'a> Uarte<'a> {
             .take()
             .map(|state| {
                 match state {
-                    Nrf52UarteStore::ActiveIdle(reg) => {
+                    Nrf52UarteStateEnum::ActiveIdle(reg) => {
                         // Perform TX interrupt checks
                         if self.tx_ready(&reg) {
                             self.disable_tx_interrupts(&reg);
@@ -490,7 +490,7 @@ impl<'a> Uarte<'a> {
                             self.state.replace(reg.into());
                         }
                     }
-                    Nrf52UarteStore::ActiveRx(reg) => {
+                    Nrf52UarteStateEnum::ActiveRx(reg) => {
                         if self.tx_ready(&reg) {
                             // potential tx interrupt
                             self.disable_tx_interrupts(&reg);
@@ -538,7 +538,7 @@ impl<'a> Uarte<'a> {
             .take()
             .map(|state| {
                 match state {
-                    Nrf52UarteStore::ActiveIdle(reg) => {
+                    Nrf52UarteStateEnum::ActiveIdle(reg) => {
                         if self.rx_ready(&reg) {
                             self.disable_rx_interrupts(&reg);
 
@@ -594,7 +594,7 @@ impl<'a> Uarte<'a> {
                             self.state.replace(reg.into());
                         }
                     }
-                    Nrf52UarteStore::ActiveTx(reg) => {
+                    Nrf52UarteStateEnum::ActiveTx(reg) => {
                         if self.rx_ready(&reg) {
                             self.disable_rx_interrupts(&reg);
 
@@ -693,37 +693,36 @@ impl<'a> Uarte<'a> {
 
     /// Transmit one byte at the time and the client is responsible for polling
     /// This is used by the panic handler
-    #[entry_point("state")]
     pub unsafe fn send_byte(&self, byte: u8) {
         self.state.take().map(|state| {
             match state {
-                Nrf52UarteStore::Off(registers) => {
+                Nrf52UarteStateEnum::Off(registers) => {
                     let registers = self.enable_uart(registers);
                     self.panic_tx_setup(byte, &registers);
                     let registers = registers.into_starttx();
                     while !self.tx_ready(&registers) {}
                     self.state.replace(registers.into());
                 }
-                Nrf52UarteStore::ActiveIdle(registers) => {
+                Nrf52UarteStateEnum::ActiveIdle(registers) => {
                     self.panic_tx_setup(byte, &registers);
                     let registers = registers.into_starttx();
                     while !self.tx_ready(&registers) {}
                     self.state.replace(registers.into());
                 }
-                Nrf52UarteStore::ActiveTx(registers) => {
+                Nrf52UarteStateEnum::ActiveTx(registers) => {
                     self.panic_tx_setup(byte, &registers);
                     // stop ongoing TX
                     let registers = registers.into_stoptx();
                     while !self.tx_ready(&registers) {}
                     self.state.replace(registers.into());
                 }
-                Nrf52UarteStore::ActiveRx(registers) => {
+                Nrf52UarteStateEnum::ActiveRx(registers) => {
                     self.panic_tx_setup(byte, &registers);
                     let registers = registers.into_starttx();
                     while !self.tx_ready(&registers) {}
                     self.state.replace(registers.into());
                 }
-                Nrf52UarteStore::ActiveRxTx(registers) => {
+                Nrf52UarteStateEnum::ActiveRxTx(registers) => {
                     self.panic_tx_setup(byte, &registers);
                     while !self.tx_ready(&registers) {}
                     self.state.replace(registers.into());
@@ -826,7 +825,7 @@ impl<'a> uart::Transmit<'a> for Uarte<'a> {
 
         match self.state.take() {
             Some(state) => match state {
-                Nrf52UarteStore::Off(registers) => {
+                Nrf52UarteStateEnum::Off(registers) => {
                     let registers = self.enable_uart(registers);
                     self.state.replace(
                         self.setup_buffer_transmit(tx_data, tx_len, registers)
@@ -834,14 +833,14 @@ impl<'a> uart::Transmit<'a> for Uarte<'a> {
                     );
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveIdle(registers) => {
+                Nrf52UarteStateEnum::ActiveIdle(registers) => {
                     self.state.replace(
                         self.setup_buffer_transmit(tx_data, tx_len, registers)
                             .into(),
                     );
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveRx(registers) => {
+                Nrf52UarteStateEnum::ActiveRx(registers) => {
                     self.state.replace(
                         self.setup_buffer_transmit(tx_data, tx_len, registers)
                             .into(),
@@ -883,22 +882,22 @@ impl<'a> uart::Configure for Uarte<'a> {
         self.state.take().map_or_else(
             || Err(ErrorCode::BUSY),
             |state| match state {
-                Nrf52UarteStore::ActiveIdle(reg) => {
+                Nrf52UarteStateEnum::ActiveIdle(reg) => {
                     self.set_baud_rate(params.baud_rate, &reg);
                     self.state.replace(reg.into());
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveRx(reg) => {
+                Nrf52UarteStateEnum::ActiveRx(reg) => {
                     self.set_baud_rate(params.baud_rate, &reg);
                     self.state.replace(reg.into());
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveRxTx(reg) => {
+                Nrf52UarteStateEnum::ActiveRxTx(reg) => {
                     self.set_baud_rate(params.baud_rate, &reg);
                     self.state.replace(reg.into());
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveTx(reg) => {
+                Nrf52UarteStateEnum::ActiveTx(reg) => {
                     self.set_baud_rate(params.baud_rate, &reg);
                     self.state.replace(reg.into());
                     Ok(())
@@ -928,7 +927,7 @@ impl<'a> uart::Receive<'a> for Uarte<'a> {
 
         match self.state.take() {
             Some(state) => match state {
-                Nrf52UarteStore::Off(reg) => {
+                Nrf52UarteStateEnum::Off(reg) => {
                     self.rx_remaining_bytes.set(truncated_length);
                     self.offset.set(0);
                     self.rx_buffer.replace(rx_buf);
@@ -942,7 +941,7 @@ impl<'a> uart::Receive<'a> for Uarte<'a> {
                     self.state.replace(reg.into());
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveIdle(reg) => {
+                Nrf52UarteStateEnum::ActiveIdle(reg) => {
                     self.rx_remaining_bytes.set(truncated_length);
                     self.offset.set(0);
                     self.rx_buffer.replace(rx_buf);
@@ -955,7 +954,7 @@ impl<'a> uart::Receive<'a> for Uarte<'a> {
                     self.state.replace(reg.into());
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveTx(reg) => {
+                Nrf52UarteStateEnum::ActiveTx(reg) => {
                     self.rx_remaining_bytes.set(truncated_length);
                     self.offset.set(0);
                     self.rx_buffer.replace(rx_buf);
@@ -968,11 +967,11 @@ impl<'a> uart::Receive<'a> for Uarte<'a> {
                     self.state.replace(reg.into());
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveRx(_) => {
+                Nrf52UarteStateEnum::ActiveRx(_) => {
                     self.state.replace(state);
                     Err((ErrorCode::BUSY, rx_buf))
                 }
-                Nrf52UarteStore::ActiveRxTx(_) => {
+                Nrf52UarteStateEnum::ActiveRxTx(_) => {
                     self.state.replace(state);
                     Err((ErrorCode::BUSY, rx_buf))
                 }
@@ -988,25 +987,25 @@ impl<'a> uart::Receive<'a> for Uarte<'a> {
     fn receive_abort(&self) -> Result<(), ErrorCode> {
         match self.state.take() {
             Some(state) => match state {
-                Nrf52UarteStore::Off(_) => {
+                Nrf52UarteStateEnum::Off(_) => {
                     self.state.replace(state);
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveIdle(_) => {
+                Nrf52UarteStateEnum::ActiveIdle(_) => {
                     self.state.replace(state);
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveRx(reg) => {
+                Nrf52UarteStateEnum::ActiveRx(reg) => {
                     self.rx_abort_in_progress.set(true);
                     self.state.replace(reg.into_stoprx().into());
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveRxTx(reg) => {
+                Nrf52UarteStateEnum::ActiveRxTx(reg) => {
                     self.rx_abort_in_progress.set(true);
                     self.state.replace(reg.into_stoprx().into());
                     Ok(())
                 }
-                Nrf52UarteStore::ActiveTx(_) => {
+                Nrf52UarteStateEnum::ActiveTx(_) => {
                     self.state.replace(state);
                     Ok(())
                 }
