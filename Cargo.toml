@@ -121,6 +121,9 @@ opt-level = "z"
 debug = true
 codegen-units = 1
 
+[patch.crates-io]
+tock-registers = { path = "libraries/tock-register-interface" }
+
 # CLIPPY CONFIGURATION
 #
 # We first disallow all lints in a particular group, then re-allow each one

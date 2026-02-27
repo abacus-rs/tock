@@ -12,7 +12,9 @@ edition.workspace = true
 cortexm4f = { path = "../../arch/cortex-m4f"}
 kernel = { path = "../../kernel" }
 enum_primitive = { path = "../../libraries/enum_primitive" }
-power_states = { path = "../../libraries/power_states" }
+# for now, fetch from github while testing
+# abacus_registers = { git = "https://github.com/abacus-rs/abacus-registers", branch = "dev" }
+abacus_registers = { path = "../../../abacus-registers"}
 
 [features]
 default = []

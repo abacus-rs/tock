@@ -12,41 +12,20 @@
 //! * Fredrik Nilsson <frednils@student.chalmers.se>
 //! * Date: March 03, 2017
 
-use core::cell::Cell;
-
-use cortexm4f::dwt;
-use kernel::hil::hw_debug::CycleCounter;
-use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
+use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
 use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
-use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 
-use power_states::{entry_point, process_register_block};
-
-// HAND IMPLEMENTATION OF SYNC STATE FOR NOW
-impl SyncState for Nrf5xTempRegisters<Reading> {
-    type SyncStateEnum = Nrf5xTempStore;
-    fn sync_state(self) -> Self::SyncStateEnum {
-        self.into()
-    }
-}
-
-impl SyncState for Nrf5xTempRegisters<Off> {
-    type SyncStateEnum = Nrf5xTempStore;
-    fn sync_state(self) -> Self::SyncStateEnum {
-        self.into()
-    }
-}
-// END HAND IMPLEMENTATION OF SYNC STATE
+use abacus_registers::process_register_block;
 
 #[repr(C)]
 #[process_register_block(
     peripheral_name = "Nrf5xTemp",
     register_base_addr = 0x4000C000,
     states = [
-        Off => [Reading],
-        Reading => [Off],
+        (Off),
+        (Reading),
     ]
 )]
 struct RegisterBlock {
@@ -141,14 +120,16 @@ register_bitfields! [u32,
 
 pub struct Temp<'a> {
     client: OptionalCell<&'a dyn kernel::hil::sensors::TemperatureClient>,
-    registers: OptionalCell<Nrf5xTempStore>,
+    registers: OptionalCell<Nrf5xTempStateEnum>,
 }
 
 impl<'a> Temp<'a> {
     pub fn new() -> Temp<'a> {
         Temp {
             client: OptionalCell::empty(),
-            registers: OptionalCell::new(Nrf5xTempStore::Off(Nrf5xTempRegisters::new())),
+            registers: OptionalCell::new(Nrf5xTempStateEnum::Off(unsafe {
+                Nrf5xTempRegisters::new(0x4000C000)
+            })),
         }
     }
 
@@ -156,7 +137,7 @@ impl<'a> Temp<'a> {
     pub fn handle_interrupt(&self) {
         self.registers.take().map(|state| {
             match state {
-                Nrf5xTempStore::Reading(reg) => {
+                Nrf5xTempStateEnum::Reading(reg) => {
                     self.disable_interrupts(&reg);
 
                     // get temperature
@@ -172,7 +153,7 @@ impl<'a> Temp<'a> {
                     // 24 instructions
                     self.registers.set(reg_result.into());
                 }
-                Nrf5xTempStore::Off(reg) => self.registers.set(reg.into()),
+                Nrf5xTempStateEnum::Off(reg) => self.registers.set(reg.into()),
             }
         });
     }
@@ -191,13 +172,13 @@ impl<'a> kernel::hil::sensors::TemperatureDriver<'a> for Temp<'a> {
         self.registers.take().map_or_else(
             || Err(ErrorCode::BUSY),
             |state| match state {
-                Nrf5xTempStore::Off(reg) => {
+                Nrf5xTempStateEnum::Off(reg) => {
                     self.enable_interrupts(&reg);
                     reg.event_datardy.write(Event::READY::CLEAR);
                     self.registers.set(reg.into_reading().into());
                     Ok(())
                 }
-                Nrf5xTempStore::Reading(reg) => {
+                Nrf5xTempStateEnum::Reading(reg) => {
                     self.registers.set(reg.into());
                     Err(ErrorCode::ALREADY)
                 }
