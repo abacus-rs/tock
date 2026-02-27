@@ -12,9 +12,8 @@ edition.workspace = true
 cortexm4f = { path = "../../arch/cortex-m4f"}
 kernel = { path = "../../kernel" }
 enum_primitive = { path = "../../libraries/enum_primitive" }
-# for now, fetch from github while testing
-# abacus_registers = { git = "https://github.com/abacus-rs/abacus-registers", branch = "dev" }
-abacus_registers = { path = "../../../abacus-registers"}
+# todo update this to fetch from cargo once publish abacus-registers crate
+abacus_registers = { git = "https://github.com/abacus-rs/abacus-registers", branch = "main}
 
 [features]
 default = []
