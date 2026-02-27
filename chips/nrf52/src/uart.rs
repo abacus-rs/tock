@@ -31,19 +31,6 @@ use abacus_registers::process_register_block;
 //     unsafe { StaticRef::new(0x40002000 as *const UarteRegisters) };
 
 // ADD SYNC STATE IMPLEMENTATION
-impl SyncState for Nrf52UarteRegisters<Active<RxIdle, TxIdle>> {
-    type SyncStateEnum = Nrf52UarteStateEnum;
-    fn sync_state(self) -> Self::SyncStateEnum {
-        self.into()
-    }
-}
-
-impl SyncState for Nrf52UarteRegisters<Off> {
-    type SyncStateEnum = Nrf52UarteStateEnum;
-    fn sync_state(self) -> Self::SyncStateEnum {
-        self.into()
-    }
-}
 
 impl SyncState for Nrf52UarteRegisters<Active<Transient, TxIdle>> {
     type SyncStateEnum = Nrf52UarteStateEnum;
