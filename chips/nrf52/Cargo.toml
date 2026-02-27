@@ -13,8 +13,7 @@ cortexm4f = { path = "../../arch/cortex-m4f" }
 kernel = { path = "../../kernel" }
 enum_primitive = { path = "../../libraries/enum_primitive" }
 # todo update this to fetch from cargo once publish abacus-registers crate
-abacus_registers = { git = "https://github.com/abacus-rs/abacus-registers", branch = "main}
-
+abacus_registers = { git = "https://github.com/abacus-rs/abacus-registers", branch = "dev"}
 [dependencies.nrf5x]
 path = "../nrf5x"
 features = ["nrf52"]
